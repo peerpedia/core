@@ -7,102 +7,72 @@ Core does not know whether articles live in git repos, PDF files,
 or flat wiki pages.  It only knows this interface.  Each backend
 (gitdb, arxiv, wiki) is a separate package that implements it.
 
-Read pipeline (no auth, no lifecycle)::
+Storage knows nothing about reviews, scores, or status.  Those are
+lifecycle-plugin concepts.  Storage only knows keys and bytes.
 
-    st: StorageContext, article_id -> get(st, article_id) -> Article
-    st: StorageContext, query      -> list(st, query)     -> list[Article]
-    st: StorageContext, id, v1, v2 -> diff(st, id, v1, v2) -> str
+Read pipeline::
 
-Write pipeline (auth + lifecycle)::
+    st: Storage, article_id -> read(st, article_id) -> Article
+    st: Storage, query      -> list(st, query)     -> list[Article]
 
-    Authorizer -> Lifecycle -> write_source / write_review / ...
+Write pipeline::
+
+    Authorizer → Lifecycle → action calls st.write(key, data, signer, message)
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from peerpedia_core.crypto import SigningKey
-from peerpedia_core.types.entities import Article, Review
 
 
 class ArticleStorage(Protocol):
-    """Storage operations the core engine requires.
+    """Generic key-value storage with versioned writes.
 
-    Implementations are plugins — swap gitdb for arxiv by changing
-    one configuration line.  Core never imports a concrete backend.
+    Implementations are plugins — git repos, PDF directories,
+    flat wiki pages.  Core never imports a concrete backend.
     """
 
     # ── Read ────────────────────────────────────────────────────────────
 
-    def get(self, article_id: str) -> Article:
-        """Return a single article by ID.
+    def read(self, key: str) -> dict[str, Any]:
+        """Return the data stored at *key* as a dict.
 
-        Raises NotFoundError if the article does not exist.
+        The dict shape depends on what was written — Article, Review,
+        or arbitrary metadata.  Callers are responsible for constructing
+        typed entities from the returned dict.
         """
         ...
 
-    def list(self, query: str | None = None) -> list[Article]:
-        """Return articles matching *query*.
+    def list(self, query: str | None = None) -> list[str]:
+        """Return keys matching *query*.
 
-        A None or empty query returns recent articles.  Specific
-        backends may support title search, author filter, etc.
+        A None or empty query returns recent keys.  Backends may support
+        prefix search, full-text search, etc.
         """
         ...
 
-    def diff(
-        self, article_id: str, from_version: str, to_version: str
+    # ── Write ───────────────────────────────────────────────────────────
+
+    def write(
+        self,
+        key: str,
+        data: dict[str, Any],
+        signer: SigningKey,
+        message: str,
     ) -> str:
-        """Return a unified diff between two versions."""
-        ...
+        """Persist *data* at *key*, return a version identifier.
 
-    # ── Source content ──────────────────────────────────────────────────
-
-    def read_source(self, article_id: str) -> bytes:
-        """Return the raw source content of *article_id*."""
-        ...
-
-    def write_source(
-        self, article_id: str, content: bytes, signer: SigningKey, message: str
-    ) -> str:
-        """Write source content, return a version identifier.
-
-        The *signer* identifies the author — backend uses it to produce
-        a verifiable commit or equivalent.
+        *signer* identifies the author.  *message* is a human-readable
+        description of the change.
         """
         ...
 
     # ── History ─────────────────────────────────────────────────────────
 
-    def get_history(
-        self, article_id: str, since: str | None = None
+    def history(
+        self, key: str, since: str | None = None
     ) -> list[dict]:
-        """Return change history for *article_id*, optionally since *since*."""
-        ...
-
-    # ── Reviews ─────────────────────────────────────────────────────────
-
-    def list_reviews(self, article_id: str) -> list[str]:
-        """Return review IDs for *article_id*."""
-        ...
-
-    def read_review(self, article_id: str, reviewer_id: str) -> Review:
-        """Return a single review."""
-        ...
-
-    def write_review(
-        self,
-        article_id: str,
-        reviewer_id: str,
-        scores: dict[str, float],
-        comment: str,
-        signer: SigningKey,
-    ) -> str:
-        """Persist a review, return a version identifier."""
-        ...
-
-    # ── Write metadata ──────────────────────────────────────────────────
-
-    def write_metadata(self, article_id: str, article: Article) -> None:
-        """Persist metadata for *article_id*."""
+        """Return change history for *key*, optionally since *since*."""
         ...
