@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from peerpedia_core.crypto import SigningKey
 from peerpedia_core.types.entities import Article, Review
 
 
@@ -62,9 +63,13 @@ class ArticleStorage(Protocol):
         ...
 
     def write_source(
-        self, article_id: str, content: bytes, author: str, message: str
+        self, article_id: str, content: bytes, signer: SigningKey, message: str
     ) -> str:
-        """Write source content, return a version identifier."""
+        """Write source content, return a version identifier.
+
+        The *signer* identifies the author — backend uses it to produce
+        a verifiable commit or equivalent.
+        """
         ...
 
     # ── History ─────────────────────────────────────────────────────────
@@ -91,7 +96,7 @@ class ArticleStorage(Protocol):
         reviewer_id: str,
         scores: dict[str, float],
         comment: str,
-        signer: object,
+        signer: SigningKey,
     ) -> str:
         """Persist a review, return a version identifier."""
         ...
