@@ -7,8 +7,9 @@ Each protocol is a ``typing.Protocol`` — no implementation, just
 structural contracts.  Plugins in other packages implement these.
 """
 
+from peerpedia_core.protocols.authorizer import Authorizer
 from peerpedia_core.protocols.lifecycle import Lifecycle
-from peerpedia_core.protocols.storage import ArticleStorage
 from peerpedia_core.protocols.scoring import ScoringEngine
+from peerpedia_core.protocols.storage import ArticleStorage
 
-__all__ = ["Lifecycle", "ArticleStorage", "ScoringEngine"]
+__all__ = ["Authorizer", "Lifecycle", "ArticleStorage", "ScoringEngine"]

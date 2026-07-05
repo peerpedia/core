@@ -3,26 +3,27 @@
 
 """Lifecycle protocol — the state-machine plugin.
 
-The core engine knows this pattern::
+The core engine pipeline for every article action::
 
-    article_action: Callable, article: Article
-        -> s = get_status(article)
-        -> next = lifecycle.next_step(article_action, s)
-        -> next(article)
+    user: User, action_name: str, article: Article
+        -> authorizer.authorize(user, article, action_name)   // are you allowed?
+        -> s = article.status
+        -> next = lifecycle.next_step(action_name, s)          // does state allow?
+        -> next(article, user)                                 // execute
 
-CLI, REPL, and server never hardcode status names or allowed transitions.
-They call ``execute(action_name, article, lifecycle)`` and the lifecycle
-plugin decides what is permitted.
+CLI, REPL, and server never hardcode status names or allowed
+transitions.  They inject Authorizer and Lifecycle plugins and
+let the protocols decide.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, Protocol
 
-from peerpedia_core.types.entities import Article
+from peerpedia_core.types.entities import Article, User
 
-# An operation that can be performed on an article.
-ArticleAction = Callable[[Article, dict[str, Any]], Article]
+# An operation on an article: takes article + user + kwargs, returns article.
+ArticleAction = Callable[[Article, User, dict[str, Any]], Article]
 
 
 class Lifecycle(Protocol):
@@ -30,7 +31,7 @@ class Lifecycle(Protocol):
 
     Each lifecycle implementation (jury, bazaar, editorial) defines its
     own states and transition rules.  The core engine does not know or
-    care what states exist — it only calls ``execute``.
+    care what states exist.
     """
 
     @property
@@ -46,7 +47,7 @@ class Lifecycle(Protocol):
     def next_step(
         self, action_name: str, status: str
     ) -> ArticleAction | None:
-        """Return the function to execute for *action_name* from *status*.
+        """Return the action function for *action_name* from *status*.
 
         Returns ``None`` when the action is not allowed in this state.
         """
@@ -54,25 +55,25 @@ class Lifecycle(Protocol):
 
 
 def execute(
+    user: User,
     action_name: str,
     article: Article,
     lifecycle: Lifecycle,
     **kwargs: Any,
 ) -> Article:
-    """Resolve and execute an action through the lifecycle plugin.
+    """Execute an article action through the lifecycle plugin.
 
-    This is the single entry point for all article operations.  CLI and
-    server handlers call this instead of hardcoding status checks::
+    Authorization must already have been performed by the handler
+    using an :class:`Authorizer`.  This function only checks whether
+    the lifecycle state permits the action, then executes it::
 
-        article = execute("publish", article, lifecycle, db=db, path=rp)
+        article = execute(user, "publish", article, lifecycle, db=db, path=rp)
     """
     action = lifecycle.next_step(action_name, article.status)
     if action is None:
-        from peerpedia_core.exceptions import NotAuthorizedError
-        raise NotAuthorizedError(
+        from peerpedia_core.exceptions import ConflictError
+        raise ConflictError(
             f"Action '{action_name}' is not allowed in status '{article.status}'",
-            permission=action_name,
-            resource_type="article",
-            resource_id=article.id,
+            conflicting_entity=action_name,
         )
-    return action(article, kwargs)
+    return action(article, user, kwargs)
