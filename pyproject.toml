@@ -1,0 +1,36 @@
+[project]
+name = "peerpedia-core"
+version = "0.1.0"
+description = "PeerPedia Core — engine protocols, types, and exceptions"
+requires-python = ">=3.11"
+license = "AGPL-3.0"
+authors = [
+    {name = "Chenqi Meng", email = "chenqimeng@example.com"},
+]
+readme = "README.md"
+keywords = ["peer-review", "academic", "p2p", "protocols"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/peerpedia/core"
+Issues = "https://github.com/peerpedia/core/issues"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["peerpedia_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
