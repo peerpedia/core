@@ -25,6 +25,7 @@ class Article:
     id: str
     title: str
     status: str                          # opaque — lifecycle plugin defines values
+    authors: tuple[str, ...] = ()        # objective authors, reconstructed from git
     abstract: str | None = None
     keywords: tuple[str, ...] = ()
     score: dict[str, float] | None = None
