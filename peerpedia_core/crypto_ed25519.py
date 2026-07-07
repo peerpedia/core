@@ -20,8 +20,14 @@ from __future__ import annotations
 import hashlib
 import secrets
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ed25519
+try:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+except ImportError:
+    raise ImportError(
+        "crypto_ed25519 requires the 'cryptography' library. "
+        "Install with: pip install peerpedia-core[ed25519]"
+    ) from None
 
 from peerpedia_core.crypto import KeyPair, SigningKey, PublicKey
 from peerpedia_core.exceptions import BadRequestError
