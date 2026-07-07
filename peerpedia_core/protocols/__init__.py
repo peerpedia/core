@@ -9,6 +9,7 @@ structural contracts.  Plugins in other packages implement these.
 
 from peerpedia_core.protocols.auth import AuthProvider, AuthResult
 from peerpedia_core.protocols.authorizer import Authorizer
+from peerpedia_core.protocols.compiler import Compiler
 from peerpedia_core.protocols.lifecycle import Lifecycle
 from peerpedia_core.protocols.review_storage import ReviewStorage
 from peerpedia_core.protocols.scoring import ScoringEngine
@@ -29,6 +30,7 @@ __all__ = [
     "AuthProvider",
     "AuthResult",
     "Authorizer",
+    "Compiler",
     "Lifecycle",
     "ReviewStorage",
     "ScoringEngine",

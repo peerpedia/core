@@ -582,3 +582,18 @@ def test_crypto_ed25519():
 
     assert sha256_hex(b"a") != ""
     assert sha256_hex(b"") == ""
+
+
+def test_compiler():
+    """Markdown → HTML reference compiler."""
+    from peerpedia_core.protocols.compiler import Compiler
+
+    class MemCompiler:
+        def compile(self, content: str, fmt: str) -> bytes:
+            if fmt == "html":
+                return f"<p>{content}</p>".encode()
+            raise ValueError(f"Unknown format: {fmt}")
+
+    c: Compiler = MemCompiler()
+    result = c.compile("Hello", "html")
+    assert result == b"<p>Hello</p>"
