@@ -7,6 +7,7 @@ Dimension names are NOT hardcoded here.  The scoring plugin defines
 which dimensions exist (e.g. five dimensions, three dimensions, etc.).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 
@@ -19,7 +20,7 @@ class Scores:
     3.75
     """
 
-    dimensions: dict[str, float] = field(default_factory=dict)
+    dimensions: Mapping[str, float] = field(default_factory=dict)
 
     def average(self) -> float:
         if not self.dimensions:

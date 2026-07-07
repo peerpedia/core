@@ -74,3 +74,16 @@ class BadRequestError(PeerpediaError):
 
     def __init__(self, detail: str = "", field: str = "", bad_value: str = "", **kwargs):
         super().__init__(detail, field=field, bad_value=bad_value, **kwargs)
+
+
+class MergeConflictError(ConflictError):
+    """Raised when a merge encounters conflicts that can't auto-resolve.
+
+    Storage-layer concept — git-specific in the current backend,
+    but the concept applies to any versioned storage.
+    """
+
+    code = "MERGE_CONFLICT"
+
+    def __init__(self, detail: str = "", conflicting_entity: str = "", **kwargs):
+        super().__init__(detail, conflicting_entity=conflicting_entity, **kwargs)

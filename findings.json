@@ -1,0 +1,50 @@
+[
+  {
+    "file": "peerpedia_core/protocols/lifecycle.py",
+    "line": 68,
+    "summary": "All five action_* function signatures are incompatible with the Evaluation type alias and with execute()'s call pattern at line 181",
+    "failure_scenario": "action_review (line 105), action_revise (line 68), action_publish (line 83), and action_delete (line 96) all take three positional args (extra, context, storage), while action_create (line 56) takes only one (storage). The Evaluation type at line 50 is Callable[[Extra, ArticleId], ArticleId] (two args), and execute() at line 181 calls evaluate(extra, context) with two. If lifecycle.resolve(action) returns any of these action_* functions directly (which the naming and module-level placement strongly suggests), calling execute('review', ...) raises TypeError: missing 1 required positional argument: 'storage'."
+  },
+  {
+    "file": "peerpedia_core/types/entities.py",
+    "line": 287,
+    "summary": "Review is @dataclass(frozen=True) but contains scores: dict[str, float] = field(default_factory=dict) — the generated __hash__ includes the dict field, making Review unhashable",
+    "failure_scenario": "hash(Review(...)) raises TypeError: unhashable type: 'dict'. Any use of Review as a dict key or in a set crashes at runtime. Despite frozen=True, review.scores['clarity'] = 5.0 also works silently (the dict reference is frozen, its contents are not)."
+  },
+  {
+    "file": "peerpedia_core/types/entities.py",
+    "line": 92,
+    "summary": "Article.score: dict[str, float] | None = None in a @dataclass(frozen=True) class — the same unhashable-type footgun",
+    "failure_scenario": "When score is set to a non-None dict, hash(Article(...)) raises TypeError. Article is a core entity likely used as a dict key or cache key across the codebase. Also applies to BibData.extra (line 229) and User.reputation (line 272)."
+  },
+  {
+    "file": "peerpedia_core/protocols/lifecycle.py",
+    "line": 112,
+    "summary": "extra['review'] raises bare KeyError if the 'review' key is missing — no friendly error message, no .get() guard",
+    "failure_scenario": "If a caller omits the 'review' key from extra (or misspells it), the function crashes with uninformative KeyError: 'review'. The same pattern appears at lines 75 (extra['content']) and 76, 90 (extra['article'])."
+  },
+  {
+    "file": "peerpedia_core/protocols/lifecycle.py",
+    "line": 112,
+    "summary": "type: ignore[assignment] on extra['review'] (and lines 75, 76, 90) suppresses a real type error — extra is dict[str, object], so the value is object, not Review/Article/str",
+    "failure_scenario": "If extra['review'] holds something other than a Review (e.g., a misconfigured caller passes a str or a dict), the type system never catches it. The error surfaces later as an AttributeError or TypeError far from the source, making debugging harder."
+  },
+  {
+    "file": "peerpedia_core/protocols/lifecycle.py",
+    "line": 47,
+    "summary": "Extra = dict[str, object] forces callers to type: ignore every key access — there is no schema enforcement for the extra dict",
+    "failure_scenario": "Every action_* function must document (in docstrings only) which keys it expects. There is no type-level contract for extra.shape. A mismatched or misspelled key passes all static checks and only fails at runtime with a raw KeyError or an opaque type error downstream."
+  },
+  {
+    "file": "peerpedia_core/types/entities.py",
+    "line": 287,
+    "summary": "Review.scores is a mutable dict inside @dataclass(frozen=True) — the frozen decorator only prevents field rebinding, not dict mutation",
+    "failure_scenario": "Code that depends on Review being fully immutable (e.g., caching, defensive copies, equality checks) can be silently broken by review.scores['clarity'] = 5.0. The object's hash also changes after mutation if the object were hashable, breaking dict/set invariants."
+  },
+  {
+    "file": "peerpedia_core/types/entities.py",
+    "line": 229,
+    "summary": "BibData.extra: dict[str, str] = field(default_factory=dict) in a frozen dataclass — same mutable-dict-in-frozen issue",
+    "failure_scenario": "bib_data.extra['doi'] = '10.xxx' works despite frozen=True. The same unhashable-type problem applies: any BibData instance with a non-empty extra dict cannot be hashed."
+  }
+]
