@@ -89,6 +89,7 @@ class Article:
     keywords: tuple[str, ...] = ()
     bib_data: BibData | None = None      # structured bibliographic metadata
     content_ref: ContentRef | None = None  # second-level dereference target
+    format: Format | None = None           # content format (e.g. markdown, typst)
     score: Scores | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -109,6 +110,7 @@ class Article:
             "abstract": self.abstract,
             "keywords": list(self.keywords),
             "content_ref": self.content_ref.ref if self.content_ref else None,
+            "format": self.format.name if self.format else None,
             "score": self.score,
         }
         if self.bib_data is not None:
@@ -163,6 +165,7 @@ class Article:
             keywords=tuple(d.get("keywords", ())),
             bib_data=bib_data,
             content_ref=ContentRef(ref=d["content_ref"]) if d.get("content_ref") else None,
+            format=Format(name=d["format"]) if d.get("format") else None,
             score=d.get("score"),
             created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else None,
             updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else None,
