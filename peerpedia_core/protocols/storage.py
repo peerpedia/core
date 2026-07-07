@@ -25,12 +25,11 @@ from peerpedia_core.types.entities import (
     Format,
     HistoryEntry,
     Review,
-    User,
     UserId,
     Version,
 )
 from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
-from peerpedia_core.protocols.user_storage import UserStorage
+from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
 from peerpedia_core.types.queries import ArticleQuery
 
 
@@ -115,16 +114,21 @@ class ArticleContentStorage(Protocol):
 
 
 class ArticleStorage(Protocol):
-    """Composed storage — meta cache + content source-of-truth.
+    """Composed storage — meta cache + content SOT for articles and reviews.
 
-    Access sub-protocols via ``get_meta()`` / ``get_content()``
-    for domain-specific operations, or use ``read_meta`` /
-    ``read_content`` for common access patterns.
-    ``reconcile`` rebuilds the meta cache from content history.
+    Article and review each follow the same meta/content split::
+
+        ArticleMetaStorage     /  ArticleContentStorage
+        ReviewMetaStorage      /  ReviewContentStorage
+
+    ``reconcile()`` rebuilds article meta from content.
+    ``reconcile_reviews()`` rebuilds review meta from content.
     """
 
+    # ── Article sub-storage ────────────────────────────────────────────
+
     def get_meta(self, key: ArticleId | None = None) -> ArticleMetaStorage:
-        """Return the metadata sub-storage for *key*.
+        """Return the article-meta sub-storage for *key*.
 
         When *key* is ``None`` (not yet created), returns a global
         meta store for id-allocation operations like ``create()``.
@@ -132,32 +136,40 @@ class ArticleStorage(Protocol):
         ...
 
     def get_content(self, key: ArticleId | None = None) -> ArticleContentStorage:
-        """Return the content sub-storage for *key*."""
+        """Return the article-content sub-storage for *key*."""
         ...
 
     def read_meta(self, key: ArticleId) -> Article:
         """Convenience — delegates to ``get_meta(key).read(key)``."""
-        ...
+        return self.get_meta(key).read(key)
 
     def read_content(self, key: ArticleId) -> ContentRef:
         """Convenience — delegates to ``get_content(key).read(key)``."""
+        return self.get_content(key).read(key)
+
+    # ── Review sub-storage ─────────────────────────────────────────────
+
+    def get_review_meta(self, key: ArticleId) -> ReviewMetaStorage:
+        """Return the review-meta sub-storage for *key*."""
         ...
 
-    def get_review(self, key: ArticleId) -> ReviewMetaStorage:
-        """Return the review sub-storage for *key*."""
+    def get_review_content(self, key: ArticleId) -> ReviewContentStorage:
+        """Return the review-content sub-storage for *key*."""
         ...
 
-    def read_review(self, key: ArticleId, reviewer_id: UserId) -> Review:
-        """Convenience — delegates to ``get_review(key).read(key, reviewer_id)``."""
-        ...
+    def read_review_meta(
+        self, key: ArticleId, reviewer_id: UserId
+    ) -> Review:
+        """Convenience — delegates to ``get_review_meta(key).read(key, reviewer_id)``."""
+        return self.get_review_meta(key).read(key, reviewer_id)
 
-    def get_user(self) -> UserStorage:
-        """Return the user sub-storage (global — not per-article)."""
-        ...
+    def read_review_content(
+        self, key: ArticleId, reviewer_id: UserId
+    ) -> list[str]:
+        """Convenience — delegates to ``get_review_content(key).read_thread(key, reviewer_id)``."""
+        return self.get_review_content(key).read_thread(key, reviewer_id)
 
-    def read_user(self, key: UserId) -> User:
-        """Convenience — delegates to ``get_user().read(key)``."""
-        ...
+    # ── Source-of-truth extraction ─────────────────────────────────────
 
     def extract(self, key: ArticleId) -> Article:
         """Extract metadata from content source-of-truth.
@@ -181,3 +193,18 @@ def reconcile(storage: ArticleStorage, key: ArticleId) -> None:
     protocol primitive.
     """
     storage.get_meta(key).update(key, storage.extract(key))
+
+
+def reconcile_reviews(storage: ArticleStorage, key: ArticleId) -> None:
+    """Rebuild review meta cache from review content SOT.
+
+    Extracts review metadata from the git content store and writes
+    it to ``ReviewMetaStorage``.  Run after review content changes.
+    """
+    rmeta = storage.get_review_meta(key)
+    rcontent = storage.get_review_content(key)
+    # For each reviewer directory in the git repo, extract scores and
+    # build/update the meta index.  The implementation is backend-specific
+    # (the protocol does not prescribe the extraction algorithm), but the
+    # pattern is: git content → meta cache.
+    ...
