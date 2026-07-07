@@ -6,7 +6,7 @@
 Dependency injection for the protocol layer.  Holds all backends
 and exposes lifecycle actions as named methods::
 
-    pp = Peerpedia(storage, lifecycle)
+    pp = Peerpedia(storage, lifecycle, user_storage)
     aid = pp.create()
     pp.revise(aid, content="...", article=...)
     pp.publish(aid, article=...)
@@ -16,14 +16,13 @@ from __future__ import annotations
 
 from peerpedia_core.protocols.compiler import Compiler
 from peerpedia_core.protocols.lifecycle import (
-    Evaluation,
     Extra,
     Lifecycle,
-    _UNIVERSAL_ACTIONS,
     execute,
 )
 from peerpedia_core.protocols.storage import ArticleStorage
-from peerpedia_core.types.entities import Article, ArticleId
+from peerpedia_core.protocols.user_storage import UserStorage
+from peerpedia_core.types.entities import Article, ArticleId, Review, User
 
 
 class Peerpedia:
@@ -33,10 +32,12 @@ class Peerpedia:
         self,
         storage: ArticleStorage,
         lifecycle: Lifecycle,
+        user_storage: UserStorage,
         compiler: Compiler | None = None,
     ):
         self.storage = storage
         self.lifecycle = lifecycle
+        self.users = user_storage
         self.compiler = compiler
 
     # ── Lifecycle actions ────────────────────────────────────────────────
@@ -54,13 +55,17 @@ class Peerpedia:
     def delete(self, article_id: ArticleId) -> ArticleId:
         return execute("delete", {}, article_id, self.lifecycle)
 
-    def review(self, article_id: ArticleId, review) -> ArticleId:
-        return execute("review", {"review": review}, article_id, self.lifecycle)
+    def review(self, article_id: ArticleId, review: Review, scores_json: str) -> ArticleId:
+        extra: Extra = {"review": review, "scores": scores_json}
+        return execute("review", extra, article_id, self.lifecycle)
 
     # ── Storage convenience ──────────────────────────────────────────────
 
     def read_meta(self, article_id: ArticleId) -> Article:
         return self.storage.read_meta(article_id)
+
+    def read_user(self, user_id) -> User:
+        return self.users.read(user_id)
 
     # ── Compiler ─────────────────────────────────────────────────────────
 
