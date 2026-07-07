@@ -34,3 +34,13 @@ include = ["peerpedia_core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+[[tool.mypy.overrides]]
+module = "peerpedia_core.*"
+disallow_untyped_defs = false
