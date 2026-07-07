@@ -587,13 +587,14 @@ def test_crypto_ed25519():
 def test_compiler():
     """Markdown → HTML reference compiler."""
     from peerpedia_core.protocols.compiler import Compiler
+    from peerpedia_core.types import OutputFormat
 
     class MemCompiler:
-        def compile(self, content: str, fmt: str) -> bytes:
-            if fmt == "html":
+        def compile(self, content: str, fmt: OutputFormat) -> bytes:
+            if fmt.name == "html":
                 return f"<p>{content}</p>".encode()
-            raise ValueError(f"Unknown format: {fmt}")
+            raise ValueError(f"Unknown format: {fmt.name}")
 
     c: Compiler = MemCompiler()
-    result = c.compile("Hello", "html")
+    result = c.compile("Hello", OutputFormat(name="html"))
     assert result == b"<p>Hello</p>"

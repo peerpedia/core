@@ -196,6 +196,13 @@ class Version:
 
 
 @dataclass(frozen=True)
+class OutputFormat:
+    """A compiler output format — ``"html"``, ``"pdf"``, ``"latex"``, etc."""
+
+    name: str
+
+
+@dataclass(frozen=True)
 class BibData:
     """Bibliographic metadata — BibLaTeX-compatible structure.
 

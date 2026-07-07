@@ -7,18 +7,21 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from peerpedia_core.types.entities import OutputFormat
+
 
 class Compiler(Protocol):
     """Compile article content to an output format.
 
     The core does not know what formats are available — that is a
-    plugin concern.  Typical targets: ``"html"``, ``"pdf"``, ``"latex"``.
+    plugin concern (``"html"``, ``"pdf"``, ``"latex"``, etc.).
 
     ::
 
-        compiler.compile("# Title\n\nHello", "html") → b"<h1>Title</h1>..."
+        compiler.compile("# Title\n\nHello", OutputFormat(name="html"))
+        → b"<h1>Title</h1>..."
     """
 
-    def compile(self, content: str, fmt: str) -> bytes:
+    def compile(self, content: str, fmt: OutputFormat) -> bytes:
         """Compile *content* to *fmt*, returning rendered bytes."""
         ...
