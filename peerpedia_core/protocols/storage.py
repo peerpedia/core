@@ -24,7 +24,6 @@ from peerpedia_core.types.entities import (
     ContentRef,
     Format,
     HistoryEntry,
-    Review,
     UserId,
     Version,
 )
