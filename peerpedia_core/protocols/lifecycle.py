@@ -5,20 +5,20 @@
 
 The core engine pipeline for every article action::
 
-    action: str, extra: Extra, context: ArticleId
+    action: str, extra: Extra, context: ArticleId | None
         -> lifecycle.actions must include action          // universal or plugin-defined
         -> lifecycle.compatible(action, context, extra)   // domain check
         -> evaluate = lifecycle.resolve(action)           // pick the morphism
-        -> evaluate(extra, context)                       // reduction → new ArticleId
+        -> evaluate(extra, context)                       // reduction -> new ArticleId
 
 CLI, REPL, and server never hardcode allowed transitions.
-They inject a Lifecycle plugin and let compose check do the work.
+They inject a Lifecycle plugin and let ``execute()`` do the work.
 
 Universal actions
 -----------------
-Every Lifecycle MUST implement these five morphisms::
+Every Lifecycle MUST support these five morphisms::
 
-    create    — persist a new article (meta + content_ref)
+    create    — persist a new article (meta + content)
     revise    — update an existing article
     publish   — make public
     delete    — remove / archive
@@ -31,9 +31,7 @@ from collections.abc import Callable
 from typing import Protocol, TYPE_CHECKING
 
 from peerpedia_core.exceptions import BadRequestError, ConflictError
-from peerpedia_core.types.entities import Article, ArticleId, Format, Review
-
-from peerpedia_core.protocols.storage import reconcile, reconcile_reviews
+from peerpedia_core.types.entities import Article, ArticleId
 
 if TYPE_CHECKING:
     from peerpedia_core.protocols.storage import ArticleStorage
@@ -41,129 +39,37 @@ if TYPE_CHECKING:
 # ── Universal actions ───────────────────────────────────────────────────────
 # Every Lifecycle plugin MUST support these.
 
-_UNIVERSAL_ACTIONS: frozenset[str] = frozenset({"create", "revise", "publish", "delete", "review"})
+_UNIVERSAL_ACTIONS: frozenset[str] = frozenset(
+    {"create", "revise", "publish", "delete", "review"}
+)
 
 # ── Types ───────────────────────────────────────────────────────────────────
 
-# Extra data injected for this operation (content from vim, metadata delta, etc.).
+# Extra data injected for this operation (content body, metadata delta, etc.).
 Extra = dict[str, object]
 
-# Evaluation = morphism reduction: extra × context → new context.
+# Evaluation = morphism reduction: extra * context -> new context.
 # *context* is ``None`` for the ``create`` action (no pre-existing article).
-#
-# The action_* functions below take ``(extra, context, storage)`` — a
-# plugin wraps them to match this signature::
-#
-#     lambda e, c: action_revise(e, c, self.storage)
 Evaluation = Callable[[Extra, ArticleId | None], ArticleId]
 
 
-# ── Universal action implementations ─────────────────────────────────────────
-
-
-def _require(extra: Extra, key: str, expected_type: type) -> object:
-    """Extract *key* from *extra* with a friendly error on mismatch."""
-    try:
-        value = extra[key]
-    except KeyError:
-        raise BadRequestError(
-            f"Missing required key {key!r} in extra",
-            field=key,
-        ) from None
-    if not isinstance(value, expected_type):
-        raise BadRequestError(
-            f"Expected {key!r} to be {expected_type.__name__}, got {type(value).__name__}",
-            field=key,
-            bad_value=str(type(value)),
-        )
-    return value
-
-
-def action_create(
-    extra: Extra, context: ArticleId | None, storage: ArticleStorage
-) -> ArticleId:
-    """Create a new article — allocate meta, init content, reconcile.
-
-    *extra* and *context* are unused — the id is allocated by meta
-    storage.  Plugins wrap this to match ``Evaluation``::
-
-        lambda e, c: action_create(e, c, self.storage)
-    """
-    article_id = storage.get_meta(None).create()          # allocates id
-    storage.get_content(article_id).create(article_id, Format(name="markdown"))
-    reconcile(storage, article_id)
-    return article_id
-
-
-def action_revise(
-    extra: Extra, context: ArticleId, storage: ArticleStorage
-) -> ArticleId:
-    """Revise an existing article — update content + meta, then reconcile.
-
-    *extra* must contain ``"content"`` (str) and ``"article"`` (Article).
-    """
-    content: str = _require(extra, "content", str)       # type: ignore[assignment]
-    article: Article = _require(extra, "article", Article)  # type: ignore[assignment]
-    storage.get_content(context).update(context, content)
-    storage.get_meta(context).update(context, article)
-    reconcile(storage, context)
-    return context
+# ── Universal action implementations ───────────────────────────────────────
 
 
 def action_publish(
-    extra: Extra, context: ArticleId, storage: ArticleStorage
-) -> ArticleId:
-    """Publish an article — update meta status, then reconcile.
+    article_id: ArticleId, article: Article, storage: ArticleStorage,
+) -> None:
+    """Publish an article — update meta status, then reconcile from SOT.
 
-    *extra* must contain ``"article"`` (Article) with the new status.
+    *publish* is a business-level status transition, not a storage
+    primitive.  It exists here because "publishing" is a PeerPedia
+    lifecycle concept, not a universal storage operation.
     """
-    article: Article = _require(extra, "article", Article)  # type: ignore[assignment]
-    storage.get_meta(context).update(context, article)
-    reconcile(storage, context)
-    return context
+    storage.meta.update(article_id, article)
+    storage.reconcile_article(article_id)
 
 
-def action_delete(
-    extra: Extra, context: ArticleId, storage: ArticleStorage
-) -> ArticleId:
-    """Delete an article — remove meta and content."""
-    storage.get_meta(context).delete(context)
-    storage.get_content(context).delete(context)
-    return context
-
-
-def action_review(
-    extra: Extra, context: ArticleId, storage: ArticleStorage,
-) -> ArticleId:
-    """Submit a peer review on *context*.
-
-    *extra* must contain ``"review"`` (Review) with ``article_id``
-    matching *context*, and ``"scores"`` (str, JSON) with the review
-    scores.
-    """
-    review: Review = _require(extra, "review", Review)  # type: ignore[assignment]
-    scores_json: str = _require(extra, "scores", str)    # type: ignore[assignment]
-    if review.article_id != context:
-        raise BadRequestError(
-            f"Review article_id {review.article_id.id!r} does not match context {context.id!r}",
-            field="review.article_id",
-            bad_value=review.article_id.id,
-        )
-
-    # Write to git SOT (content storage)
-    rcontent = storage.get_review_content(context)
-    rcontent.write_scores(context, review.reviewer_id, scores_json)
-    rcontent.write_thread_entry(context, review.reviewer_id,
-                                review.content_ref.deref(storage.get_content(context))
-                                if review.content_ref else "",
-                                "[review]")
-
-    # Rebuild meta index from content
-    reconcile_reviews(storage, context)
-    return context
-
-
-# ── Lifecycle protocol ───────────────────────────────────────────────────────
+# ── Lifecycle protocol ─────────────────────────────────────────────────────
 
 
 class Lifecycle(Protocol):
@@ -175,6 +81,9 @@ class Lifecycle(Protocol):
 
     Each plugin decides, for a given ``(action, context, extra)``,
     whether the morphism applies via ``compatible()``.
+
+    ``resolve()`` returns an ``Evaluation`` — callers have already
+    checked ``compatible()``.
     """
 
     @property
@@ -183,14 +92,9 @@ class Lifecycle(Protocol):
         ...
 
     def compatible(
-        self, action: str, context: ArticleId, extra: Extra
+        self, action: str, context: ArticleId | None, extra: Extra
     ) -> bool:
-        """Return True if *action* can apply to *context* with *extra*.
-
-        Domain check — the morphism's source must match the object.
-        Implementations may inspect the article's status, extra shape,
-        or any other factor.
-        """
+        """Return True if *action* can apply to *context* with *extra*."""
         ...
 
     def resolve(self, action: str) -> Evaluation:
@@ -199,6 +103,9 @@ class Lifecycle(Protocol):
         The caller MUST have already checked ``compatible()``.
         """
         ...
+
+
+# ── Dispatcher ──────────────────────────────────────────────────────────────
 
 
 def execute(
@@ -221,6 +128,17 @@ def execute(
             f"Unknown action '{action}'",
             field="action",
             bad_value=action,
+        )
+    # Universal invariant: create has no context; all others must have one
+    if action == "create" and context is not None:
+        raise BadRequestError(
+            f"Action 'create' must have context=None, got {context!r}",
+            field="context", bad_value=str(context),
+        )
+    if action != "create" and context is None:
+        raise BadRequestError(
+            f"Action '{action}' requires a context (article id), got None",
+            field="context", bad_value="None",
         )
     if not lifecycle.compatible(action, context, extra):
         raise ConflictError(

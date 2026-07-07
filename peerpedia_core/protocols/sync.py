@@ -42,6 +42,13 @@ def search_monotonic_boundary(
     if max_idx < 0:
         return None
 
+    # Check index 0 first — exponential phase starts from 1
+    r0 = probe(0)
+    if r0 is None:
+        return None
+    if r0 is False:
+        return 0
+
     # ── Exponential phase — find an upper bound where probe fails ──
     upper = 1
     while upper <= max_idx:
@@ -211,7 +218,7 @@ def sync_article(
     Returns the new local HEAD version after sync.  Composes
     ``ArticleSync`` + ``ArticleContentStorage`` + ``reconcile``.
     """
-    content = storage.get_content(article_id)
+    content = storage.content
     local_history = content.history(article_id)
     local_head = local_history[0].version if local_history else None
 
@@ -241,8 +248,7 @@ def sync_article(
         bundle = sync.pull_all(peer_url, article_id, since=local_head)
         if bundle:
             new_head = content.ingest_bundle(article_id, bundle)
-            from peerpedia_core.protocols.storage import reconcile
-            reconcile(storage, article_id)
+            storage.reconcile_article(article_id)
             return new_head
     elif merge_base.id == remote_head.id:
         # Local ahead — push
@@ -254,8 +260,7 @@ def sync_article(
         bundle = sync.pull_all(peer_url, article_id, since=merge_base)
         if bundle:
             content.ingest_bundle(article_id, bundle)
-            from peerpedia_core.protocols.storage import reconcile
-            reconcile(storage, article_id)
+            storage.reconcile_article(article_id)
     return local_head or Version(id="unknown")
 
 

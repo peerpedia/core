@@ -62,7 +62,7 @@ class Peerpedia:
     # ── Storage convenience ──────────────────────────────────────────────
 
     def read_meta(self, article_id: ArticleId) -> Article:
-        return self.storage.read_meta(article_id)
+        return self.storage.meta.read(article_id)
 
     def read_user(self, user_id) -> User:
         return self.users.read(user_id)
@@ -72,6 +72,6 @@ class Peerpedia:
     def compile(self, article_id: ArticleId, fmt) -> bytes:
         if self.compiler is None:
             raise RuntimeError("No compiler configured")
-        content_ref = self.storage.read_content(article_id)
-        body = self.storage.get_content(article_id).deref_body(content_ref)
+        content_ref = self.storage.content.read(article_id)
+        body = self.storage.content.read_body(content_ref)
         return self.compiler.compile(body, fmt)

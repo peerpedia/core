@@ -1,10 +1,11 @@
 """Reference fixtures — in-memory backends for all protocols."""
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 
-from peerpedia_core.exceptions import BadRequestError
+from peerpedia_core.exceptions import BadRequestError, NotFoundError
 from peerpedia_core.protocols.auth import AuthResult
 from peerpedia_core.protocols.lifecycle import (
     Lifecycle, Evaluation, Extra, _UNIVERSAL_ACTIONS,
@@ -41,7 +42,13 @@ class MemMetaStorage:
         return aid
 
     def read(self, key: ArticleId) -> Article:
-        return self._rows[key.id]
+        try:
+            return self._rows[key.id]
+        except KeyError:
+            raise NotFoundError(
+                f"Article {key.id!r} not found",
+                resource_type="article", resource_id=key.id,
+            ) from None
 
     def update(self, key: ArticleId, meta: Article) -> Version:
         self._rows[key.id] = meta
@@ -52,7 +59,25 @@ class MemMetaStorage:
         return Version(id=f"v-{time.monotonic_ns()}")
 
     def query(self, q: ArticleQuery | None = None) -> list[Article]:
-        return list(self._rows.values())
+        results = list(self._rows.values())
+        if q is None:
+            return results
+
+        if q.statuses is not None:
+            results = [a for a in results if a.status in q.statuses]
+        if q.search is not None:
+            term = q.search.lower()
+            results = [
+                a for a in results
+                if term in a.title.lower() or (a.abstract and term in a.abstract.lower())
+            ]
+        if q.id_prefix is not None:
+            results = [a for a in results if a.id.id.startswith(q.id_prefix)]
+        if q.offset:
+            results = results[q.offset:]
+        if q.limit is not None:
+            results = results[:q.limit]
+        return results
 
 
 class MemContentStorage:
@@ -72,7 +97,7 @@ class MemContentStorage:
     def read(self, key: ArticleId) -> ContentRef:
         return self._repos[key.id]
 
-    def deref_body(self, ref: ContentRef) -> str:
+    def read_body(self, ref: ContentRef) -> str:
         return self._blobs[ref.ref]
 
     def update(self, key: ArticleId, content: str) -> Version:
@@ -103,47 +128,114 @@ class MemContentStorage:
         return ArticleDiff(version_a=a, version_b=b, content_diff="")
 
 
-class MemArticleStorage:
+class MemReviewStorage:
     def __init__(self):
-        self.meta = MemMetaStorage()
-        self.content = MemContentStorage()
-        self.review_meta: dict[str, MemReviewStorage] = {}
-        self.review_content: dict[str, MemReviewContentStorage] = {}
+        self._rows: dict[str, Review] = {}
 
-    # ── Article sub-storage ──────────────────────────────────────────
+    @staticmethod
+    def _key(article_id: ArticleId, reviewer_id: UserId) -> str:
+        return f"{article_id.id}/{reviewer_id.id}"
 
-    def get_meta(self, key: ArticleId | None = None) -> ArticleMetaStorage:
-        return self.meta
+    def create(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
+        r = Review(
+            id=ReviewId(id=f"rev-{article_id.id}-{reviewer_id.id}"),
+            article_id=article_id, reviewer_id=reviewer_id,
+        )
+        self._rows[self._key(article_id, reviewer_id)] = r
+        return r
 
-    def get_content(self, key: ArticleId | None = None) -> ArticleContentStorage:
-        return self.content
+    def read(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
+        try:
+            return self._rows[self._key(article_id, reviewer_id)]
+        except KeyError:
+            raise NotFoundError(
+                f"Review by {reviewer_id.id!r} on {article_id.id!r} not found",
+                resource_type="review",
+                resource_id=f"{article_id.id}/{reviewer_id.id}",
+            ) from None
 
-    def read_meta(self, key: ArticleId) -> Article:
-        return self.meta.read(key)
+    def update(self, article_id: ArticleId, reviewer_id: UserId, review: Review) -> Version:
+        self._rows[self._key(article_id, reviewer_id)] = review
+        return Version(id=f"v-{time.monotonic_ns()}")
 
-    def read_content(self, key: ArticleId) -> ContentRef:
-        return self.content.read(key)
+    def delete(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
+        self._rows.pop(self._key(article_id, reviewer_id), None)
+        return Version(id=f"v-{time.monotonic_ns()}")
 
-    # ── Review sub-storage ───────────────────────────────────────────
+    def list(self, article_id: ArticleId) -> list[Review]:
+        prefix = f"{article_id.id}/"
+        return [v for k, v in self._rows.items() if k.startswith(prefix)]
 
-    def get_review_meta(self, key: ArticleId) -> ReviewMetaStorage:
-        if key.id not in self.review_meta:
-            self.review_meta[key.id] = MemReviewStorage()
-        return self.review_meta[key.id]
 
-    def get_review_content(self, key: ArticleId) -> ReviewContentStorage:
-        if key.id not in self.review_content:
-            self.review_content[key.id] = MemReviewContentStorage()
-        return self.review_content[key.id]
+class MemReviewContentStorage:
+    """In-memory ReviewContentStorage — simulates git repo review files."""
 
-    def read_review_meta(self, key: ArticleId, reviewer_id: UserId) -> Review:
-        return self.review_meta[key.id].read(key, reviewer_id)
+    def __init__(self):
+        self._scores: dict[str, str] = {}       # "aid/uid" -> JSON
+        self._threads: dict[str, list[str]] = {} # "aid/uid" -> [entry, ...]
 
-    def read_review_content(self, key: ArticleId, reviewer_id: UserId) -> list[str]:
-        return self.review_content[key.id].read_thread(key, reviewer_id)
+    def _key(self, article_id: ArticleId, reviewer_id: UserId) -> str:
+        return f"{article_id.id}/{reviewer_id.id}"
 
-    def extract(self, key: ArticleId) -> Article:
-        return self.read_meta(key)
+    def list_reviewers(self, article_id: ArticleId) -> list[UserId]:
+        prefix = f"{article_id.id}/"
+        return [UserId(id=k.split("/")[1]) for k in self._scores if k.startswith(prefix)]
+
+    def create(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
+        k = self._key(article_id, reviewer_id)
+        self._scores.setdefault(k, "{}")
+        self._threads.setdefault(k, [])
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def read(self, article_id: ArticleId, reviewer_id: UserId) -> str | None:
+        return self._scores.get(self._key(article_id, reviewer_id))
+
+    def update(self, article_id: ArticleId, reviewer_id: UserId,
+               scores: str) -> Version:
+        self._scores[self._key(article_id, reviewer_id)] = scores
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def delete(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
+        k = self._key(article_id, reviewer_id)
+        self._scores.pop(k, None)
+        self._threads.pop(k, None)
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def append_thread_entry(self, article_id: ArticleId, reviewer_id: UserId,
+                            content: str, marker: str) -> Version:
+        k = self._key(article_id, reviewer_id)
+        self._threads.setdefault(k, []).append(content)
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def read_thread(self, article_id: ArticleId, reviewer_id: UserId) -> list[str]:
+        return self._threads.get(self._key(article_id, reviewer_id), [])
+
+
+class MemArticleStorage(ArticleStorage):
+    """In-memory ArticleStorage — Mem* sub-storages + overridden extract."""
+
+    def __init__(self):
+        super().__init__(
+            meta=MemMetaStorage(),
+            content=MemContentStorage(),
+            review_meta=MemReviewStorage(),
+            review_content=MemReviewContentStorage(),
+            scoring=MemScoringEngine(),
+        )
+
+    def extract_reviews(self, key: ArticleId) -> list[Review]:
+        rcontent = self.review_content
+        reviews: list[Review] = []
+        for reviewer_id in rcontent.list_reviewers(key):
+            scores_json = rcontent.read(key, reviewer_id)
+            scores = Scores(dimensions=json.loads(scores_json)) if scores_json else Scores()
+            reviews.append(Review(
+                id=ReviewId(id=f"rev-{key.id}-{reviewer_id.id}"),
+                article_id=key,
+                reviewer_id=reviewer_id,
+                scores=scores,
+            ))
+        return reviews
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -175,77 +267,14 @@ class MemUserStorage:
         return list(self._rows.values())
 
 
-class MemReviewStorage:
-    def __init__(self):
-        self._rows: dict[str, Review] = {}
-
-    def create(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
-        r = Review(
-            id=ReviewId(id=f"rev-{article_id.id}-{reviewer_id.id}"),
-            article_id=article_id, reviewer_id=reviewer_id,
-        )
-        self._rows[reviewer_id.id] = r
-        return r
-
-    def read(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
-        return self._rows[reviewer_id.id]
-
-    def update(self, article_id: ArticleId, reviewer_id: UserId, review: Review) -> Version:
-        self._rows[reviewer_id.id] = review
-        return Version(id=f"v-{time.monotonic_ns()}")
-
-    def delete(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
-        self._rows.pop(reviewer_id.id, None)
-        return Version(id=f"v-{time.monotonic_ns()}")
-
-    def list(self, article_id: ArticleId) -> list[Review]:
-        return list(self._rows.values())
-
-
-class MemReviewContentStorage:
-    """In-memory ReviewContentStorage — simulates git repo review files."""
-
-    def __init__(self):
-        self._scores: dict[str, str] = {}       # "aid/uid" -> JSON
-        self._threads: dict[str, list[str]] = {} # "aid/uid" -> [entry, ...]
-
-    def _key(self, article_id: ArticleId, reviewer_id: UserId) -> str:
-        return f"{article_id.id}/{reviewer_id.id}"
-
-    def list_reviewers(self, article_id: ArticleId) -> list[UserId]:
-        prefix = f"{article_id.id}/"
-        return [UserId(id=k.split("/")[1]) for k in self._scores if k.startswith(prefix)]
-
-    def write_scores(self, article_id: ArticleId, reviewer_id: UserId,
-                     scores: str) -> Version:
-        self._scores[self._key(article_id, reviewer_id)] = scores
-        return Version(id=f"v-{time.monotonic_ns()}")
-
-    def read_scores(self, article_id: ArticleId, reviewer_id: UserId) -> str | None:
-        return self._scores.get(self._key(article_id, reviewer_id))
-
-    def write_thread_entry(self, article_id: ArticleId, reviewer_id: UserId,
-                           content: str, marker: str) -> Version:
-        k = self._key(article_id, reviewer_id)
-        self._threads.setdefault(k, []).append(content)
-        return Version(id=f"v-{time.monotonic_ns()}")
-
-    def read_thread(self, article_id: ArticleId, reviewer_id: UserId) -> list[str]:
-        return self._threads.get(self._key(article_id, reviewer_id), [])
-
-    def delete_review_dir(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
-        k = self._key(article_id, reviewer_id)
-        self._scores.pop(k, None)
-        self._threads.pop(k, None)
-        return Version(id=f"v-{time.monotonic_ns()}")
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Lifecycle
 # ═══════════════════════════════════════════════════════════════════════════
 
 class MemLifecycle:
-    def __init__(self, storage: MemArticleStorage):
+    """Lifecycle that bridges ``execute()`` to ``ArticleStorage`` methods."""
+
+    def __init__(self, storage: ArticleStorage):
         self.storage = storage
 
     @property
@@ -256,22 +285,49 @@ class MemLifecycle:
         return action in self.actions
 
     def resolve(self, action: str) -> Evaluation:
-        from peerpedia_core.protocols.lifecycle import (
-            action_create, action_revise, action_publish,
-            action_delete, action_review,
-        )
         s = self.storage
         if action == "create":
-            return lambda extra, ctx: action_create(extra, ctx, s)
+            return lambda extra, ctx: s.create_article()
         if action == "revise":
-            return lambda extra, ctx: action_revise(extra, ctx, s)
+            return lambda extra, ctx: (
+                s.update_article(ctx, str(extra["content"]),
+                                 _require_article(extra)), ctx)[1]
         if action == "publish":
-            return lambda extra, ctx: action_publish(extra, ctx, s)
+            return lambda extra, ctx: (
+                s.meta.update(ctx, _require_article(extra)),
+                s.reconcile_article(ctx), ctx)[2]
         if action == "delete":
-            return lambda extra, ctx: action_delete(extra, ctx, s)
+            return lambda extra, ctx: (s.delete_article(ctx), ctx)[1]
         if action == "review":
-            return lambda extra, ctx: action_review(extra, ctx, s)
+            return lambda extra, ctx: (
+                s.create_review(ctx, _require_review(extra),
+                                _parse_scores(extra)), ctx)[1]
         raise BadRequestError(f"Unknown action: {action}")
+
+
+def _parse_scores(extra: Extra) -> Scores:
+    scores_str = str(extra.get("scores", "{}"))
+    return Scores(dimensions=json.loads(scores_str))
+
+
+def _require_article(extra: Extra) -> Article:
+    a = extra.get("article")
+    if not isinstance(a, Article):
+        raise BadRequestError(
+            f"Expected 'article' to be Article, got {type(a).__name__}",
+            field="article", bad_value=str(type(a)),
+        )
+    return a
+
+
+def _require_review(extra: Extra) -> Review:
+    r = extra.get("review")
+    if not isinstance(r, Review):
+        raise BadRequestError(
+            f"Expected 'review' to be Review, got {type(r).__name__}",
+            field="review", bad_value=str(type(r)),
+        )
+    return r
 
 
 class MemScoringEngine:

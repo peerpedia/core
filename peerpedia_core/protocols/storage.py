@@ -1,22 +1,24 @@
 # SPDX-FileCopyrightText: 2024-2026 Chenqi Meng and PeerPedia contributors
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Article storage protocols — meta, content, and composed.
+"""Article storage — sub-storage protocols + composed concrete class.
 
 Meta and content are universally separate storage concerns::
 
     ArticleMetaStorage    — indexed cache (DB), fast reads, queryable
     ArticleContentStorage — versioned source-of-truth (git), lazy body access
-    ArticleStorage        — composed, adds ``reconcile``
+    ArticleStorage        — composed, wires sub-storages with action methods
 
 Reconcile rebuilds the meta cache from content history.
-Writes go through lifecycle actions, not storage methods directly.
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from typing import Protocol
 
+from peerpedia_core.exceptions import BadRequestError, NotFoundError
 from peerpedia_core.types.entities import (
     Article,
     ArticleDiff,
@@ -24,12 +26,20 @@ from peerpedia_core.types.entities import (
     ContentRef,
     Format,
     HistoryEntry,
+    Review,
     UserId,
     Version,
 )
 from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
 from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
+from peerpedia_core.protocols.scoring import ScoringEngine
 from peerpedia_core.types.queries import ArticleQuery
+from peerpedia_core.types.scores import Scores
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sub-storage protocols — pluggable backends
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 class ArticleMetaStorage(Protocol):
@@ -64,19 +74,18 @@ class ArticleContentStorage(Protocol):
     """Versioned content store — git-backed source of truth.
 
     Body text, commit history, and authorship live here.
-    Content is lazy-loaded via ``deref_body``.
+    Content is lazy-loaded via ``read_body``.
     """
 
     def create(self, key: ArticleId, fmt: Format) -> Version:
         """Initialize content for *key* in *fmt* (git init)."""
         ...
 
-
     def read(self, key: ArticleId) -> ContentRef:
         """Return the content locator for *key*."""
         ...
 
-    def deref_body(self, ref: ContentRef) -> str:
+    def read_body(self, ref: ContentRef) -> str:
         """Resolve *ref* to raw body text (lazy, potentially large)."""
         ...
 
@@ -112,63 +121,159 @@ class ArticleContentStorage(Protocol):
         ...
 
 
-class ArticleStorage(Protocol):
-    """Composed storage — meta cache + content SOT for articles and reviews.
+# ═══════════════════════════════════════════════════════════════════════════
+# Composed storage — concrete class, not a Protocol
+# ═══════════════════════════════════════════════════════════════════════════
 
-    Article and review each follow the same meta/content split::
 
-        ArticleMetaStorage     /  ArticleContentStorage
-        ReviewMetaStorage      /  ReviewContentStorage
+class ArticleStorage:
+    """Composed storage — wires sub-storages with article action methods.
 
-    ``reconcile()`` rebuilds article meta from content.
-    ``reconcile_reviews()`` rebuilds review meta from content.
+    Sub-storages (meta / content for articles and reviews) are injected.
+    The action methods here are the canonical implementation; backends
+    override only when they need custom storage logic.
     """
 
-    # ── Article sub-storage ────────────────────────────────────────────
+    def __init__(
+        self,
+        meta: ArticleMetaStorage,
+        content: ArticleContentStorage,
+        review_meta: ReviewMetaStorage,
+        review_content: ReviewContentStorage,
+        scoring: ScoringEngine | None = None,
+    ):
+        self._meta = meta
+        self._content = content
+        self._review_meta = review_meta
+        self._review_content = review_content
+        self._scoring = scoring
 
-    def get_meta(self, key: ArticleId | None = None) -> ArticleMetaStorage:
-        """Return the article-meta sub-storage for *key*.
+    # ── Sub-storage access ──────────────────────────────────────────────
 
-        When *key* is ``None`` (not yet created), returns a global
-        meta store for id-allocation operations like ``create()``.
+    @property
+    def meta(self) -> ArticleMetaStorage:
+        return self._meta
+
+    @property
+    def content(self) -> ArticleContentStorage:
+        return self._content
+
+    @property
+    def review_meta(self) -> ReviewMetaStorage:
+        return self._review_meta
+
+    @property
+    def review_content(self) -> ReviewContentStorage:
+        return self._review_content
+
+    # ── Article CRUD ────────────────────────────────────────────────────
+
+    def create_article(self) -> ArticleId:
+        """Create a new article — allocate id, init content, reconcile."""
+        article_id = self._meta.create()
+        self._content.create(article_id, Format(name="markdown"))
+        self.reconcile_article(article_id)
+        return article_id
+
+    def read_article(self, article_id: ArticleId) -> Article:
+        """Read article metadata (cheap — from indexed cache)."""
+        return self._meta.read(article_id)
+
+    def update_article(
+        self, article_id: ArticleId, content_str: str, article: Article,
+    ) -> None:
+        """Update an existing article — content + meta, then reconcile."""
+        self._content.update(article_id, content_str)
+        self._meta.update(article_id, article)
+        self.reconcile_article(article_id)
+
+    def delete_article(self, article_id: ArticleId) -> None:
+        """Delete an article — remove meta first (cache), then content (SOT)."""
+        self._meta.delete(article_id)
+        self._content.delete(article_id)
+
+    # ── Review CRUD ─────────────────────────────────────────────────────
+
+    def create_review(
+        self, article_id: ArticleId, review: Review, scores: Scores,
+    ) -> None:
+        """Create a review — write content, reconcile meta, update score."""
+        if review.article_id != article_id:
+            raise BadRequestError(
+                f"Review article_id {review.article_id.id!r} does not match "
+                f"context {article_id.id!r}",
+                field="review.article_id",
+                bad_value=review.article_id.id,
+            )
+
+        # Serialize scores for content storage (adapter concern)
+        scores_json = json.dumps(dict(scores.dimensions))
+
+        # Dereference the review body content if present
+        thread_content = (
+            self._content.read_body(review.content_ref)
+            if review.content_ref else ""
+        )
+
+        # Write to git SOT (content storage)
+        self._review_content.update(article_id, review.reviewer_id, scores_json)
+        self._review_content.append_thread_entry(
+            article_id, review.reviewer_id, thread_content, "[review]",
+        )
+
+        # Rebuild meta index from content
+        self._reconcile_reviews(article_id)
+
+        # Update article aggregate score
+        self._update_article_score(article_id)
+
+    def read_review(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
+        """Read a review from the indexed meta cache."""
+        return self._review_meta.read(article_id, reviewer_id)
+
+    def update_review(
+        self, article_id: ArticleId, reviewer_id: UserId,
+        review: Review, scores: Scores,
+    ) -> None:
+        """Update an existing review — scores + thread, then reconcile."""
+        scores_json = json.dumps(dict(scores.dimensions))
+        self._review_content.update(article_id, reviewer_id, scores_json)
+        self._review_content.append_thread_entry(
+            article_id, reviewer_id,
+            self._content.read_body(review.content_ref) if review.content_ref else "",
+            "[reply]",
+        )
+        self._reconcile_reviews(article_id)
+        self._update_article_score(article_id)
+
+    def delete_review(self, article_id: ArticleId, reviewer_id: UserId) -> None:
+        """Delete a review — remove meta first (cache), then content (SOT)."""
+        self._review_meta.delete(article_id, reviewer_id)
+        self._review_content.delete(article_id, reviewer_id)
+        self._update_article_score(article_id)
+
+    # ── Score computation ───────────────────────────────────────────────
+
+    def _update_article_score(self, article_id: ArticleId) -> None:
+        """Recompute article aggregate score from all reviews."""
+        if self._scoring is None:
+            return
+        reviews = self._review_meta.list(article_id)
+        score = self._scoring.compute(reviews)
+        article = self._meta.read(article_id)
+        self._meta.update(article_id, replace(article, score=score))
+
+    # ── Reconcile — public entry point for sync ─────────────────────────
+
+    def reconcile_article(self, key: ArticleId) -> None:
+        """Rebuild article meta cache from content SOT.
+
+        Called internally by ``create`` / ``revise`` / ``publish``, and
+        externally by sync after pulling remote data.
         """
-        ...
+        self._meta.update(key, self.extract(key))
 
-    def get_content(self, key: ArticleId | None = None) -> ArticleContentStorage:
-        """Return the article-content sub-storage for *key*."""
-        ...
-
-    def read_meta(self, key: ArticleId) -> Article:
-        """Convenience — delegates to ``get_meta(key).read(key)``."""
-        return self.get_meta(key).read(key)
-
-    def read_content(self, key: ArticleId) -> ContentRef:
-        """Convenience — delegates to ``get_content(key).read(key)``."""
-        return self.get_content(key).read(key)
-
-    # ── Review sub-storage ─────────────────────────────────────────────
-
-    def get_review_meta(self, key: ArticleId) -> ReviewMetaStorage:
-        """Return the review-meta sub-storage for *key*."""
-        ...
-
-    def get_review_content(self, key: ArticleId) -> ReviewContentStorage:
-        """Return the review-content sub-storage for *key*."""
-        ...
-
-    def read_review_meta(
-        self, key: ArticleId, reviewer_id: UserId
-    ) -> Review:
-        """Convenience — delegates to ``get_review_meta(key).read(key, reviewer_id)``."""
-        return self.get_review_meta(key).read(key, reviewer_id)
-
-    def read_review_content(
-        self, key: ArticleId, reviewer_id: UserId
-    ) -> list[str]:
-        """Convenience — delegates to ``get_review_content(key).read_thread(key, reviewer_id)``."""
-        return self.get_review_content(key).read_thread(key, reviewer_id)
-
-    # ── Source-of-truth extraction ─────────────────────────────────────
+    # ── Source-of-truth extraction ──────────────────────────────────────
 
     def extract(self, key: ArticleId) -> Article:
         """Extract metadata from content source-of-truth.
@@ -179,52 +284,52 @@ class ArticleStorage(Protocol):
         - ``created_at`` / ``updated_at`` ← git commit timestamps
         - ``title`` / ``abstract`` ← YAML frontmatter
 
-        The caller composes this with ``meta.update()`` to rebuild
-        the cache — see ``reconcile()``, the derived helper.
+        The default implementation reads from the meta cache and fills
+        in content_ref from the content store.  Backends with real git
+        history should override.
         """
-        ...
-
-
-def reconcile(storage: ArticleStorage, key: ArticleId) -> None:
-    """Rebuild meta cache from content source-of-truth.
-
-    ``extract`` + ``meta.update`` — a derived convenience, not a
-    protocol primitive.
-    """
-    storage.get_meta(key).update(key, storage.extract(key))
-
-
-def reconcile_reviews(storage: ArticleStorage, key: ArticleId) -> None:
-    """Rebuild review meta cache from review content SOT.
-
-    Extracts review metadata from the git content store and writes
-    it to ``ReviewMetaStorage``.  Run after review content changes.
-    """
-    import json
-
-    from peerpedia_core.types.entities import Review, Scores
-
-    rmeta = storage.get_review_meta(key)
-    rcontent = storage.get_review_content(key)
-
-    for reviewer_id in rcontent.list_reviewers(key):
-        scores_json = rcontent.read_scores(key, reviewer_id)
-        scores = Scores(dimensions=json.loads(scores_json)) if scores_json else Scores()
-
-        # Read or create the meta entry
+        article = self._meta.read(key)
         try:
-            existing = rmeta.read(key, reviewer_id)
+            content_ref = self._content.read(key)
         except Exception:
-            existing = None
-
-        if existing is None:
-            rmeta.create(key, reviewer_id)
-            existing = rmeta.read(key, reviewer_id)
-
-        updated = Review(
-            id=existing.id,
-            article_id=key,
-            reviewer_id=reviewer_id,
-            scores=scores,
+            content_ref = article.content_ref
+        return replace(
+            article,
+            content_ref=content_ref,
+            format=article.format or Format(name="markdown"),
         )
-        rmeta.update(key, reviewer_id, updated)
+
+    def extract_reviews(self, key: ArticleId) -> list[Review]:
+        """Extract Review objects from review content SOT.
+
+        The default implementation is empty — backends with review content
+        should override.
+        """
+        return []
+
+    # ── Reconcile helpers ───────────────────────────────────────────────
+
+    def _reconcile_reviews(self, key: ArticleId) -> None:
+        """Rebuild review meta cache from review content SOT."""
+        rmeta = self._review_meta
+
+        for review in self.extract_reviews(key):
+            try:
+                existing = rmeta.read(key, review.reviewer_id)
+            except NotFoundError:
+                existing = None
+
+            if existing is None:
+                rmeta.create(key, review.reviewer_id)
+                existing = rmeta.read(key, review.reviewer_id)
+
+            updated = replace(
+                existing,
+                article_id=key,
+                reviewer_id=review.reviewer_id,
+                scope=review.scope,
+                scores=review.scores,
+                content_ref=review.content_ref,
+                created_at=review.created_at,
+            )
+            rmeta.update(key, review.reviewer_id, updated)

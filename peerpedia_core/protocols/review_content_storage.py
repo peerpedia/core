@@ -10,8 +10,8 @@ Reviews live inside the article git repository under
     reviews/{dir_id}/threads/001.md
     reviews/{dir_id}/threads/002.md
 
-This protocol provides file-level read/write access.  Semantic
-operations (submit, reply) live in lifecycle actions.
+This protocol provides CRUD for review content plus thread append/read.
+Semantic operations (submit, reply) live on ``ArticleStorage``.
 """
 
 from __future__ import annotations
@@ -22,31 +22,44 @@ from peerpedia_core.types.entities import ArticleId, UserId, Version
 
 
 class ReviewContentStorage(Protocol):
-    """File-level operations on review content in the article git repo.
+    """CRUD for review content in the article git repo.
 
     Each method targets the reviewer's directory under
     ``reviews/{dir_id}/`` within the article repository.
+
+    Scores are the primary content (create / read / update).
+    Thread entries are append-only (no update — each reply is a new entry).
     """
 
-    def list_reviewers(
-        self, article_id: ArticleId,
-    ) -> list[UserId]:
-        """Return all reviewer ids that have written content for *article_id*."""
-        ...
+    # ── CRUD ────────────────────────────────────────────────────────────
 
-    def write_scores(
-        self, article_id: ArticleId, reviewer_id: UserId, scores: str
+    def create(
+        self, article_id: ArticleId, reviewer_id: UserId,
     ) -> Version:
-        """Write ``scores.json`` for *reviewer_id*.  *scores* is JSON text."""
+        """Initialize the review directory for *reviewer_id*."""
         ...
 
-    def read_scores(
-        self, article_id: ArticleId, reviewer_id: UserId
+    def read(
+        self, article_id: ArticleId, reviewer_id: UserId,
     ) -> str | None:
         """Read ``scores.json`` — return JSON text or None."""
         ...
 
-    def write_thread_entry(
+    def update(
+        self, article_id: ArticleId, reviewer_id: UserId, scores: str,
+    ) -> Version:
+        """Write ``scores.json`` for *reviewer_id*.  *scores* is JSON text."""
+        ...
+
+    def delete(
+        self, article_id: ArticleId, reviewer_id: UserId,
+    ) -> Version:
+        """Remove the entire ``reviews/{dir_id}/`` directory."""
+        ...
+
+    # ── Thread (append-only) ────────────────────────────────────────────
+
+    def append_thread_entry(
         self, article_id: ArticleId, reviewer_id: UserId,
         content: str, marker: str,
     ) -> Version:
@@ -63,8 +76,10 @@ class ReviewContentStorage(Protocol):
         """Return all thread entry contents, ordered by filename."""
         ...
 
-    def delete_review_dir(
-        self, article_id: ArticleId, reviewer_id: UserId,
-    ) -> Version:
-        """Remove the entire ``reviews/{dir_id}/`` directory."""
+    # ── Query ───────────────────────────────────────────────────────────
+
+    def list_reviewers(
+        self, article_id: ArticleId,
+    ) -> list[UserId]:
+        """Return all reviewer ids that have written content for *article_id*."""
         ...

@@ -7,15 +7,6 @@ Each type carries only its essential identity.  Version identifiers
 (commit hash, revision number, etc.) are storage-layer concerns and
 do not belong here.  Status values are opaque strings — the lifecycle
 plugin defines what they mean.
-
-Dereference chain
------------------
-::
-
-    ArticleId.deref_meta(storage)     ──→  Article       (cheap)
-    ArticleId.deref_content(storage)  ──→  ContentRef    (cheap)
-    Article.deref()                   ──→  ContentRef|None (pure field access)
-    ContentRef.deref(storage)         ──→  str           (lazy, expensive)
 """
 
 from __future__ import annotations
@@ -23,16 +14,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from peerpedia_core.types.scores import Scores
-
-if TYPE_CHECKING:
-    from peerpedia_core.protocols.storage import (
-        ArticleContentStorage,
-        ArticleMetaStorage,
-    )
-    from peerpedia_core.protocols.user_storage import UserStorage
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -42,17 +25,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ArticleId:
-    """A pointer into storage — ``&ArticleId`` yields an ``Article``."""
+    """An article's unique identifier — opaque wrapper."""
 
     id: str
-
-    def deref_meta(self, meta: ArticleMetaStorage) -> Article:
-        """&id → Article metadata (cheap)."""
-        return meta.read(self)
-
-    def deref_content(self, content: ArticleContentStorage) -> ContentRef:
-        """&id → content storage path (cheap)."""
-        return content.read(self)
 
 
 @dataclass(frozen=True)
@@ -60,10 +35,6 @@ class UserId:
     """A user's unique identifier — opaque wrapper."""
 
     id: str
-
-    def deref(self, users: UserStorage) -> User:
-        """&id → User (cheap)."""
-        return users.read(self)
 
 
 @dataclass(frozen=True)
@@ -90,13 +61,9 @@ class Article:
     bib_data: BibData | None = None      # structured bibliographic metadata
     content_ref: ContentRef | None = None  # second-level dereference target
     format: Format | None = None           # content format (e.g. markdown, typst)
-    score: Scores | None = None
+    score: Scores | None = None            # aggregate score, updated on review submission
     created_at: datetime | None = None
     updated_at: datetime | None = None
-
-    def deref(self) -> ContentRef | None:
-        """&article → content storage path (second-level dereference)."""
-        return self.content_ref
 
     def to_dict(self) -> dict:
         """Article → JSON-serializable dict."""
@@ -111,7 +78,7 @@ class Article:
             "keywords": list(self.keywords),
             "content_ref": self.content_ref.ref if self.content_ref else None,
             "format": self.format.name if self.format else None,
-            "score": self.score,
+            "score": dict(self.score.dimensions) if self.score else None,
         }
         if self.bib_data is not None:
             d["bib_data"] = asdict(self.bib_data)
@@ -125,7 +92,10 @@ class Article:
         """Article → transport bytes (canonical JSON)."""
         import json
         return json.dumps(
-            self.to_dict(), ensure_ascii=False, default=str
+            self.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
 
     @classmethod
@@ -166,7 +136,7 @@ class Article:
             bib_data=bib_data,
             content_ref=ContentRef(ref=d["content_ref"]) if d.get("content_ref") else None,
             format=Format(name=d["format"]) if d.get("format") else None,
-            score=d.get("score"),
+            score=Scores(dimensions=d["score"]) if d.get("score") else None,
             created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else None,
             updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else None,
         )
@@ -174,13 +144,9 @@ class Article:
 
 @dataclass(frozen=True)
 class ContentRef:
-    """A pointer to raw body text — ``&ContentRef`` yields a ``str``."""
+    """A pointer to raw body text — resolves via ``content.read_body(ref)``."""
 
     ref: str
-
-    def deref(self, content: ArticleContentStorage) -> str:
-        """&ref → raw content text (lazy, possibly expensive)."""
-        return content.deref_body(self)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from peerpedia_core.exceptions import BadRequestError, ConflictError
 from peerpedia_core.protocols.lifecycle import Extra, execute
 from peerpedia_core.protocols.sync import find_merge_base
@@ -25,14 +27,14 @@ def test_full_lifecycle():
     new_id = execute("create", {}, None, lc)
     assert new_id.id == "art-1"
 
-    meta_store = storage.get_meta(new_id)
-    content_store = storage.get_content(new_id)
-    article = new_id.deref_meta(meta_store)
+    meta_store = storage.meta
+    content_store = storage.content
+    article = meta_store.read(new_id)
     assert article.status == "draft"
 
-    cref = new_id.deref_content(content_store)
+    cref = content_store.read(new_id)
     assert cref is not None
-    assert cref.deref(content_store) == ""
+    assert content_store.read_body(cref) == ""
 
     # Revise
     revised_meta = Article(
@@ -42,23 +44,26 @@ def test_full_lifecycle():
     )
     extra: Extra = {"content": "# Introduction\n\nHello world.", "article": revised_meta}
     execute("revise", extra, new_id, lc)
-    cref = new_id.deref_content(content_store)
-    assert "Hello world" in cref.deref(content_store)
+    cref = content_store.read(new_id)
+    assert "Hello world" in content_store.read_body(cref)
 
-    # Publish
+    # Publish — build from current meta to keep title/abstract from revise
+    current = storage.meta.read(new_id)
     pub_meta = Article(
-        id=article.id, title=article.title, status="published",
-        authors=article.authors, abstract=article.abstract, keywords=article.keywords,
-        bib_data=article.bib_data, content_ref=article.content_ref,
+        id=current.id, title=current.title, status="published",
+        authors=current.authors, abstract=current.abstract, keywords=current.keywords,
+        bib_data=current.bib_data, content_ref=current.content_ref,
     )
     execute("publish", {"article": pub_meta}, new_id, lc)
-    assert storage.read_meta(new_id).status == "published"
+    published = storage.meta.read(new_id)
+    assert published.status == "published"
+    assert published.title == "A Great Paper"
 
     # User (standalone, not through ArticleStorage)
     users = MemUserStorage()
     uid = users.create()
     users.update(uid, User(id=uid, name="Bob", public_key="ab" * 32))
-    assert uid.deref(users).name == "Bob"
+    assert users.read(uid).name == "Bob"
 
     # Review (through review content storage)
     import json
@@ -70,11 +75,11 @@ def test_full_lifecycle():
     execute("review", {"review": review, "scores": scores_json}, new_id, lc)
 
     # Read back from content storage
-    rcontent = storage.get_review_content(new_id)
-    assert rcontent.read_scores(new_id, uid) == scores_json
+    rcontent = storage.review_content
+    assert rcontent.read(new_id, uid) == scores_json
 
     # Read back from meta storage
-    rmeta = storage.get_review_meta(new_id)
+    rmeta = storage.review_meta
     reviews = rmeta.list(new_id)
     assert len(reviews) == 1
     assert reviews[0].reviewer_id.id == uid.id
@@ -118,39 +123,33 @@ def test_auth():
     assert result.ok and result.user_id.id == "alice"
 
 
-def test_userid_deref():
+def test_user_storage_read():
     store = MemUserStorage()
     uid = store.create()
     store.update(uid, User(id=uid, name="Charlie"))
-    assert uid.deref(store).name == "Charlie"
+    assert store.read(uid).name == "Charlie"
 
 
-def test_deref_chain():
+def test_content_storage_read():
     meta, content = MemMetaStorage(), MemContentStorage()
     aid = meta.create()
     content.create(aid, Format(name="markdown"))
     content.update(aid, "# Body text")
-    assert aid.deref_meta(meta).status == "draft"
-    assert aid.deref_content(content).deref(content) == "# Body text"
+    assert meta.read(aid).status == "draft"
+    assert content.read_body(content.read(aid)) == "# Body text"
 
 
 def test_execute_unknown_action():
     storage = MemArticleStorage()
-    try:
+    with pytest.raises(BadRequestError):
         execute("unknown", {}, ArticleId(id="x"), MemLifecycle(storage))
-        assert False
-    except BadRequestError:
-        pass
 
 
 def test_execute_incompatible():
     class Strict(MemLifecycle):
         def compatible(self, action, context, extra): return False
-    try:
+    with pytest.raises(ConflictError):
         execute("revise", {}, ArticleId(id="x"), Strict(MemArticleStorage()))
-        assert False
-    except ConflictError:
-        pass
 
 
 def test_find_merge_base():
@@ -192,21 +191,115 @@ def test_compiler():
     assert c.compile("Hello", Format(name="html")) == b"<p>Hello</p>"
 
 
+def test_article_encode_decode_preserves_score():
+    """Score round-trips through encode/decode as proper Scores type."""
+    a = Article(
+        id=ArticleId(id="a1"), title="T", status="draft",
+        score=Scores({"clarity": 4.0}),
+    )
+    b = Article.decode(a.encode())
+    assert isinstance(b.score, Scores)
+    assert b.score.get("clarity") == 4.0
+
+
+def test_two_reviews_aggregate_score():
+    """Multiple reviews produce aggregated score via ScoringEngine."""
+    import json
+    storage = MemArticleStorage()
+    lc = MemLifecycle(storage)
+
+    new_id = execute("create", {}, None, lc)
+
+    users = MemUserStorage()
+    alice = users.create()
+    users.update(alice, User(id=alice, name="Alice"))
+    bob = users.create()
+    users.update(bob, User(id=bob, name="Bob"))
+
+    # Alice gives high scores
+    execute("review", {
+        "review": Review(id=ReviewId(id="r1"), article_id=new_id, reviewer_id=alice,
+                         scores=Scores({"clarity": 5.0})),
+        "scores": json.dumps({"clarity": 5.0}),
+    }, new_id, lc)
+
+    # Bob gives low scores
+    execute("review", {
+        "review": Review(id=ReviewId(id="r2"), article_id=new_id, reviewer_id=bob,
+                         scores=Scores({"clarity": 1.0})),
+        "scores": json.dumps({"clarity": 1.0}),
+    }, new_id, lc)
+
+    # Aggregate should be average
+    article = storage.read_article(new_id)
+    assert article.score is not None
+    assert article.score.get("clarity") == 3.0  # (5+1)/2
+
+
+def test_same_reviewer_reviews_two_articles():
+    """MemReviewStorage composite key prevents cross-article overwrite."""
+    import json
+    storage = MemArticleStorage()
+    lc = MemLifecycle(storage)
+
+    aid1 = execute("create", {}, None, lc)
+    aid2 = execute("create", {}, None, lc)
+
+    users = MemUserStorage()
+    uid = users.create()
+    users.update(uid, User(id=uid, name="Reviewer"))
+
+    execute("review", {
+        "review": Review(id=ReviewId(id="r1"), article_id=aid1, reviewer_id=uid,
+                         scores=Scores({"clarity": 4.0})),
+        "scores": json.dumps({"clarity": 4.0}),
+    }, aid1, lc)
+
+    execute("review", {
+        "review": Review(id=ReviewId(id="r2"), article_id=aid2, reviewer_id=uid,
+                         scores=Scores({"clarity": 2.0})),
+        "scores": json.dumps({"clarity": 2.0}),
+    }, aid2, lc)
+
+    # Both articles have their own reviews
+    r1 = storage.read_review(aid1, uid)
+    r2 = storage.read_review(aid2, uid)
+    assert r1.scores.get("clarity") == 4.0
+    assert r2.scores.get("clarity") == 2.0
+
+
+def test_review_article_id_mismatch_rejected():
+    """Submitting review with wrong article_id should raise BadRequestError."""
+    import pytest
+    storage = MemArticleStorage()
+    lc = MemLifecycle(storage)
+
+    new_id = execute("create", {}, None, lc)
+    wrong_id = ArticleId(id="wrong")
+
+    with pytest.raises(BadRequestError):
+        execute("review", {
+            "review": Review(id=ReviewId(id="r1"), article_id=wrong_id,
+                             reviewer_id=UserId(id="uid")),
+            "scores": '{}',
+        }, new_id, lc)
+
+
 def test_review_content_round_trip():
     """Write review to content storage, read back."""
     rcontent = MemReviewContentStorage()
     aid = ArticleId(id="art-1")
     uid = UserId(id="bob")
 
-    rcontent.write_scores(aid, uid, '{"clarity":5.0}')
-    assert rcontent.read_scores(aid, uid) == '{"clarity":5.0}'
+    rcontent.update(aid, uid, '{"clarity":5.0}')
+    assert rcontent.read(aid, uid) == '{"clarity":5.0}'
 
-    rcontent.write_thread_entry(aid, uid, "Great paper!", "[review]")
-    rcontent.write_thread_entry(aid, uid, "Thanks for the feedback!", "[reply]")
+    rcontent.append_thread_entry(aid, uid, "Great paper!", "[review]")
+    rcontent.append_thread_entry(aid, uid, "Thanks for the feedback!", "[reply]")
     thread = rcontent.read_thread(aid, uid)
     assert len(thread) == 2
     assert thread[0] == "Great paper!"
 
-    rcontent.delete_review_dir(aid, uid)
-    assert rcontent.read_scores(aid, uid) is None
+    rcontent.delete(aid, uid)
+    assert rcontent.read(aid, uid) is None
     assert rcontent.read_thread(aid, uid) == []

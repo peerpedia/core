@@ -5,3 +5,7 @@
 
 Zero dependencies.  No IO.  All other PeerPedia packages depend on this one.
 """
+
+from peerpedia_core.peerpedia import Peerpedia
+
+__all__ = ["Peerpedia"]
