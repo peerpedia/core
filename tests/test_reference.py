@@ -207,7 +207,7 @@ class MemReviewStorage:
 
 
 class MemLifecycle:
-    """Lifecycle that wires universal actions to MemArticleStorage."""
+    """Lifecycle that delegates to the real action_* functions."""
 
     def __init__(self, storage: MemArticleStorage):
         self.storage = storage
@@ -220,57 +220,22 @@ class MemLifecycle:
         return action in self.actions
 
     def resolve(self, action: str) -> Evaluation:
-        if action == "create":
-            return lambda extra, ctx: self._action_create()
-        if action == "revise":
-            return lambda extra, ctx: self._action_revise(extra, ctx)
-        if action == "publish":
-            return lambda extra, ctx: self._action_publish(extra, ctx)
-        if action == "delete":
-            return lambda extra, ctx: self._action_delete(extra, ctx)
-        if action == "review":
-            return lambda extra, ctx: self._action_review(extra, ctx)
-        raise BadRequestError(f"Unknown action: {action}")
-
-    def _action_create(self) -> ArticleId:
-        article_id = self.storage.meta.create()
-        self.storage.content.create(article_id, _MD)
-        return article_id
-
-    def _action_revise(self, extra: Extra, ctx: ArticleId) -> ArticleId:
-        content = extra.get("content", "")
-        article = extra.get("article")
-        self.storage.content.update(ctx, content, )
-        if article is not None:
-            self.storage.meta.update(ctx, article)
-        return ctx
-
-    def _action_publish(self, extra: Extra, ctx: ArticleId) -> ArticleId:
-        meta = self.storage.meta.read(ctx)
-        published = Article(
-            id=meta.id, title=meta.title, status="published",
-            authors=meta.authors, abstract=meta.abstract, keywords=meta.keywords,
-            bib_data=meta.bib_data, content_ref=meta.content_ref,
-            created_at=meta.created_at,
-            updated_at=datetime.now(timezone.utc),
+        from peerpedia_core.protocols.lifecycle import (
+            action_create, action_revise, action_publish,
+            action_delete, action_review,
         )
-        self.storage.meta.update(ctx, published)
-        return ctx
-
-    def _action_delete(self, extra: Extra, ctx: ArticleId) -> ArticleId:
-        self.storage.meta.delete(ctx)
-        self.storage.content.delete(ctx)
-        return ctx
-
-    def _action_review(self, extra: Extra, ctx: ArticleId) -> ArticleId:
-        review = extra.get("review")
-        if review is None:
-            raise BadRequestError("Missing review in extra")
-        rstore = self.storage.get_review(ctx)
-        rstore.create(ctx, review.reviewer_id)
-        # Copy scores from the submitted review
-        rstore.update(ctx, review.reviewer_id, review)
-        return ctx
+        s = self.storage
+        if action == "create":
+            return lambda extra, ctx: action_create(extra, ctx, s)
+        if action == "revise":
+            return lambda extra, ctx: action_revise(extra, ctx, s)
+        if action == "publish":
+            return lambda extra, ctx: action_publish(extra, ctx, s)
+        if action == "delete":
+            return lambda extra, ctx: action_delete(extra, ctx, s)
+        if action == "review":
+            return lambda extra, ctx: action_review(extra, ctx, s)
+        raise BadRequestError(f"Unknown action: {action}")
 
 
 class MemScoringEngine:
@@ -380,7 +345,12 @@ def test_full_lifecycle():
     assert "Hello world" in updated_content
 
     # ── Publish ──
-    pub_extra: Extra = {"article": revised_meta}
+    pub_meta = Article(
+        id=article.id, title=article.title, status="published",
+        authors=article.authors, abstract=article.abstract, keywords=article.keywords,
+        bib_data=article.bib_data, content_ref=article.content_ref,
+    )
+    pub_extra: Extra = {"article": pub_meta}
     execute("publish", pub_extra, new_id, lc)
     published = storage.read_meta(new_id)
     assert published.status == "published"

@@ -31,7 +31,7 @@ from collections.abc import Callable
 from typing import Protocol, TYPE_CHECKING
 
 from peerpedia_core.exceptions import BadRequestError, ConflictError
-from peerpedia_core.types.entities import ArticleId, Review
+from peerpedia_core.types.entities import Article, ArticleId, Format, Review
 
 from peerpedia_core.protocols.storage import reconcile
 
@@ -50,6 +50,11 @@ Extra = dict[str, object]
 
 # Evaluation = morphism reduction: extra × context → new context.
 # *context* is ``None`` for the ``create`` action (no pre-existing article).
+#
+# The action_* functions below take ``(extra, context, storage)`` — a
+# plugin wraps them to match this signature::
+#
+#     lambda e, c: action_revise(e, c, self.storage)
 Evaluation = Callable[[Extra, ArticleId | None], ArticleId]
 
 
@@ -74,14 +79,18 @@ def _require(extra: Extra, key: str, expected_type: type) -> object:
     return value
 
 
-def action_create(storage: ArticleStorage) -> ArticleId:
+def action_create(
+    extra: Extra, context: ArticleId | None, storage: ArticleStorage
+) -> ArticleId:
     """Create a new article — allocate meta, init content, reconcile.
 
-    The only action that takes no ``extra`` or ``context`` —
-    the id is allocated by meta storage.
+    *extra* and *context* are unused — the id is allocated by meta
+    storage.  Plugins wrap this to match ``Evaluation``::
+
+        lambda e, c: action_create(e, c, self.storage)
     """
     article_id = storage.get_meta(None).create()          # allocates id
-    storage.get_content(article_id).create(article_id)     # git init
+    storage.get_content(article_id).create(article_id, Format(name="markdown"))
     reconcile(storage, article_id)
     return article_id
 
