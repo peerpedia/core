@@ -20,10 +20,12 @@ from peerpedia_core.protocols.review_storage import ReviewStorage
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
 from peerpedia_core.protocols.user_storage import UserStorage
 from peerpedia_core.types import (
-    Article, ArticleDiff, ArticleId, BibData, ContentRef,
+    Article, ArticleDiff, ArticleId, BibData, ContentRef, Format,
     HistoryEntry, Review, ReviewId, Scores, User, UserId, Version,
 )
 from peerpedia_core.types.queries import ArticleQuery
+
+_MD = Format(name="markdown")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,7 +68,7 @@ class MemContentStorage:
         self._repos: dict[str, ContentRef] = {}  # article_id → ref
         self._versions: dict[str, list[Version]] = {}  # article_id → versions
 
-    def create(self, key: ArticleId) -> Version:
+    def create(self, key: ArticleId, fmt: Format) -> Version:
         ref = ContentRef(ref=f"blob:{key.id}-0")
         self._repos[key.id] = ref
         self._blobs[ref.ref] = ""
@@ -232,7 +234,7 @@ class MemLifecycle:
 
     def _action_create(self) -> ArticleId:
         article_id = self.storage.meta.create()
-        self.storage.content.create(article_id, )
+        self.storage.content.create(article_id, _MD)
         return article_id
 
     def _action_revise(self, extra: Extra, ctx: ArticleId) -> ArticleId:
@@ -481,7 +483,7 @@ def test_deref_chain():
     content = MemContentStorage()
 
     aid = meta.create()
-    content.create(aid, )
+    content.create(aid, _MD)
     content.update(aid, "# Body text", )
 
     article = aid.deref_meta(meta)

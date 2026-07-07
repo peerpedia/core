@@ -22,6 +22,7 @@ from peerpedia_core.types.entities import (
     ArticleDiff,
     ArticleId,
     ContentRef,
+    Format,
     HistoryEntry,
     Review,
     User,
@@ -68,9 +69,10 @@ class ArticleContentStorage(Protocol):
     Content is lazy-loaded via ``deref_body``.
     """
 
-    def create(self, key: ArticleId) -> Version:
-        """Initialize content for *key* (git init)."""
+    def create(self, key: ArticleId, fmt: Format) -> Version:
+        """Initialize content for *key* in *fmt* (git init)."""
         ...
+
 
     def read(self, key: ArticleId) -> ContentRef:
         """Return the content locator for *key*."""
