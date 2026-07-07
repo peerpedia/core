@@ -1,6 +1,6 @@
 [project]
 name = "peerpedia-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "PeerPedia Core — engine protocols, types, and exceptions"
 requires-python = ">=3.11"
 license = "AGPL-3.0"
