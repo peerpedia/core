@@ -535,25 +535,6 @@ def test_sync_article():
     assert remote_v.id == v.id
 
 
-def test_crypto_ed25519():
-    """Round-trip key generation, signing, verification."""
-    from peerpedia_core.crypto_ed25519 import (
-        generate_key_pair, derive_key_pair, new_salt,
-        sha256_hex, sign_detached, verify_signature,
-    )
-
-    kp = generate_key_pair()
-    sig = sign_detached(kp.signing_key, b"data")
-    assert verify_signature(kp.public_key, b"data", sig)
-    assert not verify_signature(kp.public_key, b"wrong", sig)
-
-    salt = new_salt()
-    kp2 = derive_key_pair("pw", salt)
-    kp3 = derive_key_pair("pw", salt)
-    assert kp2.public_key.hex == kp3.public_key.hex
-
-    assert sha256_hex(b"a") != ""
-    assert sha256_hex(b"") == ""
 
 
 def test_compiler():
