@@ -12,7 +12,8 @@ from peerpedia_core.types import (
 
 from tests.conftest import (
     MemArticleStorage, MemArticleSync, MemAuthProvider, MemContentStorage,
-    MemLifecycle, MemMetaStorage, MemReviewSync, MemScoringEngine, MemUserStorage,
+    MemLifecycle, MemMetaStorage, MemReviewContentStorage, MemReviewSync,
+    MemScoringEngine, MemUserStorage,
 )
 
 
@@ -53,20 +54,32 @@ def test_full_lifecycle():
     execute("publish", {"article": pub_meta}, new_id, lc)
     assert storage.read_meta(new_id).status == "published"
 
-    # User + Review
-    uid = storage.users.create()
-    storage.users.update(uid, User(id=uid, name="Bob", public_key="ab" * 32))
-    assert uid.deref(storage.users).name == "Bob"
+    # User (standalone, not through ArticleStorage)
+    users = MemUserStorage()
+    uid = users.create()
+    users.update(uid, User(id=uid, name="Bob", public_key="ab" * 32))
+    assert uid.deref(users).name == "Bob"
 
+    # Review (through review content storage)
+    import json
     review = Review(
         id=ReviewId(id="r1"), article_id=new_id, reviewer_id=uid,
         scores=Scores(dimensions={"clarity": 4.0, "rigor": 3.5}),
     )
-    execute("review", {"review": review}, new_id, lc)
-    reviews = storage.get_review(new_id).list(new_id)
+    scores_json = json.dumps({"clarity": 4.0, "rigor": 3.5})
+    execute("review", {"review": review, "scores": scores_json}, new_id, lc)
+
+    # Read back from content storage
+    rcontent = storage.get_review_content(new_id)
+    assert rcontent.read_scores(new_id, uid) == scores_json
+
+    # Read back from meta storage
+    rmeta = storage.get_review_meta(new_id)
+    reviews = rmeta.list(new_id)
     assert len(reviews) == 1
     assert reviews[0].reviewer_id.id == uid.id
 
+    # Scoring
     engine = MemScoringEngine()
     assert engine.compute(reviews).average() == 3.75
 
@@ -74,7 +87,7 @@ def test_full_lifecycle():
 
     encoded = article.encode()
     assert Article.decode(encoded).title == article.title
-    assert len(storage.users.search("bob")) == 1
+    assert len(users.search("bob")) == 1
 
 
 def test_sync():
@@ -177,3 +190,23 @@ def test_compiler():
 
     c: Compiler = MemCompiler()
     assert c.compile("Hello", Format(name="html")) == b"<p>Hello</p>"
+
+
+def test_review_content_round_trip():
+    """Write review to content storage, read back."""
+    rcontent = MemReviewContentStorage()
+    aid = ArticleId(id="art-1")
+    uid = UserId(id="bob")
+
+    rcontent.write_scores(aid, uid, '{"clarity":5.0}')
+    assert rcontent.read_scores(aid, uid) == '{"clarity":5.0}'
+
+    rcontent.write_thread_entry(aid, uid, "Great paper!", "[review]")
+    rcontent.write_thread_entry(aid, uid, "Thanks for the feedback!", "[reply]")
+    thread = rcontent.read_thread(aid, uid)
+    assert len(thread) == 2
+    assert thread[0] == "Great paper!"
+
+    rcontent.delete_review_dir(aid, uid)
+    assert rcontent.read_scores(aid, uid) is None
+    assert rcontent.read_thread(aid, uid) == []

@@ -13,6 +13,7 @@ from peerpedia_core.protocols.storage import (
     ArticleContentStorage, ArticleMetaStorage, ArticleStorage,
 )
 from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
+from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
 from peerpedia_core.protocols.user_storage import UserStorage
 from peerpedia_core.types import (
@@ -106,8 +107,10 @@ class MemArticleStorage:
     def __init__(self):
         self.meta = MemMetaStorage()
         self.content = MemContentStorage()
-        self.reviews: dict[str, MemReviewStorage] = {}
-        self.users = MemUserStorage()
+        self.review_meta: dict[str, MemReviewStorage] = {}
+        self.review_content: dict[str, MemReviewContentStorage] = {}
+
+    # ── Article sub-storage ──────────────────────────────────────────
 
     def get_meta(self, key: ArticleId | None = None) -> ArticleMetaStorage:
         return self.meta
@@ -121,19 +124,23 @@ class MemArticleStorage:
     def read_content(self, key: ArticleId) -> ContentRef:
         return self.content.read(key)
 
-    def get_review(self, key: ArticleId) -> ReviewMetaStorage:
-        if key.id not in self.reviews:
-            self.reviews[key.id] = MemReviewStorage()
-        return self.reviews[key.id]
+    # ── Review sub-storage ───────────────────────────────────────────
 
-    def read_review(self, key: ArticleId, reviewer_id: UserId) -> Review:
-        return self.reviews[key.id].read(key, reviewer_id)
+    def get_review_meta(self, key: ArticleId) -> ReviewMetaStorage:
+        if key.id not in self.review_meta:
+            self.review_meta[key.id] = MemReviewStorage()
+        return self.review_meta[key.id]
 
-    def get_user(self) -> UserStorage:
-        return self.users
+    def get_review_content(self, key: ArticleId) -> ReviewContentStorage:
+        if key.id not in self.review_content:
+            self.review_content[key.id] = MemReviewContentStorage()
+        return self.review_content[key.id]
 
-    def read_user(self, key: UserId) -> User:
-        return self.users.read(key)
+    def read_review_meta(self, key: ArticleId, reviewer_id: UserId) -> Review:
+        return self.review_meta[key.id].read(key, reviewer_id)
+
+    def read_review_content(self, key: ArticleId, reviewer_id: UserId) -> list[str]:
+        return self.review_content[key.id].read_thread(key, reviewer_id)
 
     def extract(self, key: ArticleId) -> Article:
         return self.read_meta(key)
@@ -193,6 +200,44 @@ class MemReviewStorage:
 
     def list(self, article_id: ArticleId) -> list[Review]:
         return list(self._rows.values())
+
+
+class MemReviewContentStorage:
+    """In-memory ReviewContentStorage — simulates git repo review files."""
+
+    def __init__(self):
+        self._scores: dict[str, str] = {}       # "aid/uid" -> JSON
+        self._threads: dict[str, list[str]] = {} # "aid/uid" -> [entry, ...]
+
+    def _key(self, article_id: ArticleId, reviewer_id: UserId) -> str:
+        return f"{article_id.id}/{reviewer_id.id}"
+
+    def list_reviewers(self, article_id: ArticleId) -> list[UserId]:
+        prefix = f"{article_id.id}/"
+        return [UserId(id=k.split("/")[1]) for k in self._scores if k.startswith(prefix)]
+
+    def write_scores(self, article_id: ArticleId, reviewer_id: UserId,
+                     scores: str) -> Version:
+        self._scores[self._key(article_id, reviewer_id)] = scores
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def read_scores(self, article_id: ArticleId, reviewer_id: UserId) -> str | None:
+        return self._scores.get(self._key(article_id, reviewer_id))
+
+    def write_thread_entry(self, article_id: ArticleId, reviewer_id: UserId,
+                           content: str, marker: str) -> Version:
+        k = self._key(article_id, reviewer_id)
+        self._threads.setdefault(k, []).append(content)
+        return Version(id=f"v-{time.monotonic_ns()}")
+
+    def read_thread(self, article_id: ArticleId, reviewer_id: UserId) -> list[str]:
+        return self._threads.get(self._key(article_id, reviewer_id), [])
+
+    def delete_review_dir(self, article_id: ArticleId, reviewer_id: UserId) -> Version:
+        k = self._key(article_id, reviewer_id)
+        self._scores.pop(k, None)
+        self._threads.pop(k, None)
+        return Version(id=f"v-{time.monotonic_ns()}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

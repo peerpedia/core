@@ -201,10 +201,31 @@ def reconcile_reviews(storage: ArticleStorage, key: ArticleId) -> None:
     Extracts review metadata from the git content store and writes
     it to ``ReviewMetaStorage``.  Run after review content changes.
     """
+    import json
+
+    from peerpedia_core.types.entities import Review, Scores
+
     rmeta = storage.get_review_meta(key)
     rcontent = storage.get_review_content(key)
-    # For each reviewer directory in the git repo, extract scores and
-    # build/update the meta index.  The implementation is backend-specific
-    # (the protocol does not prescribe the extraction algorithm), but the
-    # pattern is: git content → meta cache.
-    ...
+
+    for reviewer_id in rcontent.list_reviewers(key):
+        scores_json = rcontent.read_scores(key, reviewer_id)
+        scores = Scores(dimensions=json.loads(scores_json)) if scores_json else Scores()
+
+        # Read or create the meta entry
+        try:
+            existing = rmeta.read(key, reviewer_id)
+        except Exception:
+            existing = None
+
+        if existing is None:
+            rmeta.create(key, reviewer_id)
+            existing = rmeta.read(key, reviewer_id)
+
+        updated = Review(
+            id=existing.id,
+            article_id=key,
+            reviewer_id=reviewer_id,
+            scores=scores,
+        )
+        rmeta.update(key, reviewer_id, updated)

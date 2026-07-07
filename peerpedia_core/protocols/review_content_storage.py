@@ -28,6 +28,12 @@ class ReviewContentStorage(Protocol):
     ``reviews/{dir_id}/`` within the article repository.
     """
 
+    def list_reviewers(
+        self, article_id: ArticleId,
+    ) -> list[UserId]:
+        """Return all reviewer ids that have written content for *article_id*."""
+        ...
+
     def write_scores(
         self, article_id: ArticleId, reviewer_id: UserId, scores: str
     ) -> Version:

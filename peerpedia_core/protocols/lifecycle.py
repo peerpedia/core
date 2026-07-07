@@ -33,7 +33,7 @@ from typing import Protocol, TYPE_CHECKING
 from peerpedia_core.exceptions import BadRequestError, ConflictError
 from peerpedia_core.types.entities import Article, ArticleId, Format, Review
 
-from peerpedia_core.protocols.storage import reconcile
+from peerpedia_core.protocols.storage import reconcile, reconcile_reviews
 
 if TYPE_CHECKING:
     from peerpedia_core.protocols.storage import ArticleStorage
@@ -138,18 +138,28 @@ def action_review(
     """Submit a peer review on *context*.
 
     *extra* must contain ``"review"`` (Review) with ``article_id``
-    matching *context*.
+    matching *context*, and ``"scores"`` (str, JSON) with the review
+    scores.
     """
     review: Review = _require(extra, "review", Review)  # type: ignore[assignment]
+    scores_json: str = _require(extra, "scores", str)    # type: ignore[assignment]
     if review.article_id != context:
         raise BadRequestError(
             f"Review article_id {review.article_id.id!r} does not match context {context.id!r}",
             field="review.article_id",
             bad_value=review.article_id.id,
         )
-    rstore = storage.get_review(context)
-    rstore.create(context, review.reviewer_id)
-    rstore.update(context, review.reviewer_id, review)
+
+    # Write to git SOT (content storage)
+    rcontent = storage.get_review_content(context)
+    rcontent.write_scores(context, review.reviewer_id, scores_json)
+    rcontent.write_thread_entry(context, review.reviewer_id,
+                                review.content_ref.deref(storage.get_content(context))
+                                if review.content_ref else "",
+                                "[review]")
+
+    # Rebuild meta index from content
+    reconcile_reviews(storage, context)
     return context
 
 
