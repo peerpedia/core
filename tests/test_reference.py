@@ -232,13 +232,13 @@ class MemLifecycle:
 
     def _action_create(self) -> ArticleId:
         article_id = self.storage.meta.create()
-        self.storage.content.create(article_id)
+        self.storage.content.create(article_id, )
         return article_id
 
     def _action_revise(self, extra: Extra, ctx: ArticleId) -> ArticleId:
         content = extra.get("content", "")
         article = extra.get("article")
-        self.storage.content.update(ctx, content)
+        self.storage.content.update(ctx, content, )
         if article is not None:
             self.storage.meta.update(ctx, article)
         return ctx
@@ -481,8 +481,8 @@ def test_deref_chain():
     content = MemContentStorage()
 
     aid = meta.create()
-    content.create(aid)
-    content.update(aid, "# Body text")
+    content.create(aid, )
+    content.update(aid, "# Body text", )
 
     article = aid.deref_meta(meta)
     assert article.status == "draft"
