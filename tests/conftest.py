@@ -12,7 +12,7 @@ from peerpedia_core.protocols.lifecycle import (
 from peerpedia_core.protocols.storage import (
     ArticleContentStorage, ArticleMetaStorage, ArticleStorage,
 )
-from peerpedia_core.protocols.review_storage import ReviewStorage
+from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
 from peerpedia_core.protocols.user_storage import UserStorage
 from peerpedia_core.types import (
@@ -121,7 +121,7 @@ class MemArticleStorage:
     def read_content(self, key: ArticleId) -> ContentRef:
         return self.content.read(key)
 
-    def get_review(self, key: ArticleId) -> ReviewStorage:
+    def get_review(self, key: ArticleId) -> ReviewMetaStorage:
         if key.id not in self.reviews:
             self.reviews[key.id] = MemReviewStorage()
         return self.reviews[key.id]

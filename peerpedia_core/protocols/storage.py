@@ -29,7 +29,7 @@ from peerpedia_core.types.entities import (
     UserId,
     Version,
 )
-from peerpedia_core.protocols.review_storage import ReviewStorage
+from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
 from peerpedia_core.protocols.user_storage import UserStorage
 from peerpedia_core.types.queries import ArticleQuery
 
@@ -143,7 +143,7 @@ class ArticleStorage(Protocol):
         """Convenience — delegates to ``get_content(key).read(key)``."""
         ...
 
-    def get_review(self, key: ArticleId) -> ReviewStorage:
+    def get_review(self, key: ArticleId) -> ReviewMetaStorage:
         """Return the review sub-storage for *key*."""
         ...
 

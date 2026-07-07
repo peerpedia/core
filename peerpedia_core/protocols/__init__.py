@@ -12,7 +12,7 @@ from peerpedia_core.protocols.authorizer import Authorizer
 from peerpedia_core.protocols.compiler import Compiler
 from peerpedia_core.protocols.lifecycle import Lifecycle
 from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
-from peerpedia_core.protocols.review_storage import ReviewStorage
+from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
 from peerpedia_core.protocols.scoring import ScoringEngine
 from peerpedia_core.protocols.storage import (
     ArticleContentStorage,
@@ -34,7 +34,7 @@ __all__ = [
     "Compiler",
     "Lifecycle",
     "ReviewContentStorage",
-    "ReviewStorage",
+    "ReviewMetaStorage",
     "ScoringEngine",
     "UserStorage",
 ]
