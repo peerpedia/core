@@ -196,8 +196,8 @@ class Version:
 
 
 @dataclass(frozen=True)
-class OutputFormat:
-    """A compiler output format — ``"html"``, ``"pdf"``, ``"latex"``, etc."""
+class Format:
+    """A content format — ``"html"``, ``"pdf"``, ``"latex"``, ``"markdown"``, etc."""
 
     name: str
 

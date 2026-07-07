@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from peerpedia_core.types.entities import OutputFormat
+from peerpedia_core.types.entities import Format
 
 
 class Compiler(Protocol):
@@ -18,10 +18,10 @@ class Compiler(Protocol):
 
     ::
 
-        compiler.compile("# Title\n\nHello", OutputFormat(name="html"))
+        compiler.compile("# Title\n\nHello", Format(name="html"))
         → b"<h1>Title</h1>..."
     """
 
-    def compile(self, content: str, fmt: OutputFormat) -> bytes:
+    def compile(self, content: str, fmt: Format) -> bytes:
         """Compile *content* to *fmt*, returning rendered bytes."""
         ...
