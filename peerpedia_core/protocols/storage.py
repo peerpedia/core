@@ -123,11 +123,15 @@ class ArticleStorage(Protocol):
     ``reconcile`` rebuilds the meta cache from content history.
     """
 
-    def get_meta(self, key: ArticleId) -> ArticleMetaStorage:
-        """Return the metadata sub-storage for *key*."""
+    def get_meta(self, key: ArticleId | None = None) -> ArticleMetaStorage:
+        """Return the metadata sub-storage for *key*.
+
+        When *key* is ``None`` (not yet created), returns a global
+        meta store for id-allocation operations like ``create()``.
+        """
         ...
 
-    def get_content(self, key: ArticleId) -> ArticleContentStorage:
+    def get_content(self, key: ArticleId | None = None) -> ArticleContentStorage:
         """Return the content sub-storage for *key*."""
         ...
 
