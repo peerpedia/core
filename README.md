@@ -1,5 +1,8 @@
 # Peerpedia Core
 
+[![PyPI](https://img.shields.io/pypi/v/peerpedia-core)](https://pypi.org/project/peerpedia-core/)
+[![Python](https://img.shields.io/pypi/pyversions/peerpedia-core)](https://pypi.org/project/peerpedia-core/)
+
 Zero-dependency protocol layer for PeerPedia — the peer-reviewed academic
 publishing platform built on Git.
 
