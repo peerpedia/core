@@ -13,6 +13,15 @@ Serialization lives on the entity types: ``Article.encode()`` /
 
 from __future__ import annotations
 
+__all__ = [
+    "ArticleSync",
+    "ReviewSync",
+    "find_merge_base",
+    "search_monotonic_boundary",
+    "sync_article",
+    "sync_review",
+]
+
 from collections.abc import Callable
 from typing import Protocol, TYPE_CHECKING
 
@@ -213,25 +222,47 @@ def sync_article(
     article_id: ArticleId,
     peer_url: str,
 ) -> Version:
-    """Sync *article_id* with *peer_url* — three-way merge.
+    """Sync *article_id* with *peer_url*.
 
-    Returns the new local HEAD version after sync.  Composes
-    ``ArticleSync`` + ``ArticleContentStorage`` + ``reconcile``.
+    Decides push vs pull based on merge-base discovery.  Does NOT
+    perform content-level merging — diverged histories raise
+    ``MergeConflictError``.  The caller is responsible for resolution.
+
+    Returns the new local HEAD version after sync.
     """
+    from peerpedia_core.exceptions import MergeConflictError
+
     content = storage.content
     local_history = content.history(article_id)
-    local_head = local_history[0].version if local_history else None
+    local_head: Version | None = local_history[0].version if local_history else None
 
     # ── Probe remote ──
     remote_head = sync.fetch_version(peer_url, article_id)
-    if remote_head is None:
-        # Remote doesn't have this article — push everything
-        if local_head:
-            bundle = content.create_bundle(article_id, since=None)
-            return sync.push(peer_url, article_id, bundle)
+    if remote_head is None and local_head is None:
         raise ValueError("sync_article: no local or remote content")
+    if remote_head is None and local_head is not None:
+        # Remote empty — push full bundle
+        full_bundle = content.create_bundle(article_id, since=None)
+        sync.push(peer_url, article_id, full_bundle)
+        return local_head
+    if remote_head is not None and local_head is None:
+        # Local empty — pull full bundle
+        remote_bundle = sync.pull_all(peer_url, article_id, since=None)
+        if remote_bundle is None:
+            from peerpedia_core.exceptions import PeerpediaError
+            raise PeerpediaError(
+                f"Remote reported HEAD but returned no bundle for "
+                f"{article_id.id!r}",
+                resource_type="article",
+                resource_id=article_id.id,
+            )
+        new_head = content.ingest_bundle(article_id, remote_bundle)
+        storage.reconcile_article(article_id)
+        return new_head
 
-    if local_head and local_head.id == remote_head.id:
+    # Both have content — narrow local_head to Version (not None post-guards)
+    assert local_head is not None
+    if remote_head is not None and local_head.id == remote_head.id:
         return local_head  # already in sync
 
     # ── Find merge base ──
@@ -242,25 +273,73 @@ def sync_article(
         [e.version for e in local_history], _probe,
     )
 
-    # ── Three-way decision ──
-    if merge_base is None or merge_base.id == local_head.id if local_head else False:
-        # Local behind — pull remote
-        bundle = sync.pull_all(peer_url, article_id, since=local_head)
-        if bundle:
-            new_head = content.ingest_bundle(article_id, bundle)
+    # ── Decision ──
+    if merge_base is None:
+        raise MergeConflictError(
+            "No common ancestor found — histories may be unrelated. "
+            "Manual merge required.",
+            conflicting_entity=article_id.id,
+        )
+
+    if merge_base.id == local_head.id:
+        # Local behind remote — pull incremental
+        pull_bundle = sync.pull_all(peer_url, article_id, since=local_head)
+        if pull_bundle:
+            new_head = content.ingest_bundle(article_id, pull_bundle)
             storage.reconcile_article(article_id)
             return new_head
-    elif merge_base.id == remote_head.id:
-        # Local ahead — push
-        if local_head:
-            bundle = content.create_bundle(article_id, since=remote_head)
-            return sync.push(peer_url, article_id, bundle, since=remote_head)
-    else:
-        # Diverged — pull remote, local stays on top
-        bundle = sync.pull_all(peer_url, article_id, since=merge_base)
-        if bundle:
-            content.ingest_bundle(article_id, bundle)
-            storage.reconcile_article(article_id)
-    return local_head or Version(id="unknown")
+        return local_head
+
+    if remote_head is not None and merge_base.id == remote_head.id:
+        # Local ahead of remote — push incremental
+        bundle = content.create_bundle(article_id, since=remote_head)
+        sync.push(peer_url, article_id, bundle, since=remote_head)
+        return local_head
+
+    # Diverged — cannot auto-resolve
+    raise MergeConflictError(
+        f"Histories diverged at {merge_base.id!r}. "
+        "Manual merge required.",
+        conflicting_entity=article_id.id,
+    )
 
 
+
+
+# ── Review sync orchestrator ─────────────────────────────────────────────
+
+
+def sync_review(
+    sync: ReviewSync,
+    storage: ArticleStorage,
+    article_id: ArticleId,
+    reviewer_id: UserId,
+    peer_url: str,
+) -> Version:
+    """Push local review data to *peer_url*.
+
+    Reads the review (scores + thread) from local storage, serialises
+    it as JSON, and pushes to the remote peer.  Returns the version
+    assigned by the receiver.
+
+    For pulling, use ``sync.pull()`` directly.
+    """
+    import json as _json
+
+    review_content = storage.review_content.read(article_id, reviewer_id)
+    if review_content is None:
+        from peerpedia_core.exceptions import NotFoundError
+
+        raise NotFoundError(
+            f"No review found for {reviewer_id!r} on {article_id!r}",
+            resource_type="review",
+            resource_id=f"{article_id.id}/{reviewer_id.id}",
+        )
+
+    thread = storage.review_content.read_thread(article_id, reviewer_id)
+    payload = _json.dumps(
+        {"scores": _json.loads(review_content), "thread": thread},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    return sync.push(peer_url, article_id, reviewer_id, payload)

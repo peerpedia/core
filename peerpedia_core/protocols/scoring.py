@@ -9,6 +9,8 @@ The scoring plugin (in peerpedia-compute) implements this.
 
 from __future__ import annotations
 
+__all__ = ["ScoringEngine"]
+
 from typing import Protocol
 
 from peerpedia_core.types.entities import Review

@@ -9,8 +9,18 @@ PeerpediaError (base)       ``code: str``  ``detail: str``  ``context: dict``
   ├── NotFoundError          resource_type, resource_id
   ├── NotAuthorizedError     permission, resource_type, resource_id
   ├── ConflictError          conflicting_entity
+  │   └── MergeConflictError
   └── BadRequestError        field, bad_value
 """
+
+__all__ = [
+    "BadRequestError",
+    "ConflictError",
+    "MergeConflictError",
+    "NotFoundError",
+    "NotAuthorizedError",
+    "PeerpediaError",
+]
 
 
 class PeerpediaError(Exception):
@@ -24,9 +34,9 @@ class PeerpediaError(Exception):
 
     code: str = "ERROR"
 
-    def __init__(self, detail: str = "", **context):
+    def __init__(self, detail: str = "", **context: object) -> None:
         if "code" in context:
-            self.code = context.pop("code")
+            self.code = str(context.pop("code"))
         if not detail and self.code != "ERROR":
             detail = self.code
         super().__init__(detail)
@@ -41,7 +51,7 @@ class NotFoundError(PeerpediaError):
 
     code = "NOT_FOUND"
 
-    def __init__(self, detail: str = "", resource_type: str = "", resource_id: str = "", **kwargs):
+    def __init__(self, detail: str = "", resource_type: str = "", resource_id: str = "", **kwargs: object) -> None:
         if resource_type and resource_id:
             kwargs[f"{resource_type}_id"] = resource_id
         super().__init__(detail, resource_type=resource_type, resource_id=resource_id, **kwargs)
@@ -53,7 +63,7 @@ class NotAuthorizedError(PeerpediaError):
     code = "NOT_AUTHORIZED"
 
     def __init__(self, detail: str = "", permission: str = "",
-                 resource_type: str = "", resource_id: str = "", **kwargs):
+                 resource_type: str = "", resource_id: str = "", **kwargs: object) -> None:
         super().__init__(detail, permission=permission,
                          resource_type=resource_type, resource_id=resource_id, **kwargs)
 
@@ -63,7 +73,7 @@ class ConflictError(PeerpediaError):
 
     code = "CONFLICT"
 
-    def __init__(self, detail: str = "", conflicting_entity: str = "", **kwargs):
+    def __init__(self, detail: str = "", conflicting_entity: str = "", **kwargs: object) -> None:
         super().__init__(detail, conflicting_entity=conflicting_entity, **kwargs)
 
 
@@ -72,7 +82,7 @@ class BadRequestError(PeerpediaError):
 
     code = "BAD_REQUEST"
 
-    def __init__(self, detail: str = "", field: str = "", bad_value: str = "", **kwargs):
+    def __init__(self, detail: str = "", field: str = "", bad_value: str = "", **kwargs: object) -> None:
         super().__init__(detail, field=field, bad_value=bad_value, **kwargs)
 
 
@@ -85,5 +95,5 @@ class MergeConflictError(ConflictError):
 
     code = "MERGE_CONFLICT"
 
-    def __init__(self, detail: str = "", conflicting_entity: str = "", **kwargs):
+    def __init__(self, detail: str = "", conflicting_entity: str = "", **kwargs: object) -> None:
         super().__init__(detail, conflicting_entity=conflicting_entity, **kwargs)

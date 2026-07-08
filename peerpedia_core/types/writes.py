@@ -3,16 +3,21 @@
 
 """Abstract write metadata — storage-agnostic, no IO.
 
-Bundles the identity and intent behind a storage write so the
-protocol doesn't scatter related parameters across the signature.
+Bundles entity data, content, and commit provenance into value objects
+so storage protocols receive complete write payloads in one parameter.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from peerpedia_core.crypto import SigningKey
-from peerpedia_core.types.entities import User
+from peerpedia_core.types.entities import User, UserId
+
+if TYPE_CHECKING:
+    from peerpedia_core.types.entities import Article
+    from peerpedia_core.types.scores import Scores
 
 
 @dataclass
@@ -29,7 +34,7 @@ class CommitData:
         commit = CommitData(
             signer=sk,
             message="Initial submission",
-            user=User(id="alice-1", name="Alice"),
+            user=User(id=UserId(id="alice-1"), name="Alice"),
         )
         storage.write("article-1", data, commit)
     """
@@ -42,3 +47,45 @@ class CommitData:
 
     user: User
     """Public identity — display name and public key."""
+
+
+@dataclass(frozen=True)
+class ArticleWrite:
+    """Complete write payload for an article — metadata + body + provenance.
+
+    Backends use this to write both content and frontmatter (title,
+    abstract, authors, status) into the SOT as a single bundled operation.
+    """
+
+    article: Article
+    """Full article entity — metadata fields populate git frontmatter."""
+
+    content: str
+    """Raw body text (markdown, typst, etc.)."""
+
+    commit: CommitData | None = None
+    """Who wrote this and why (optional — metadata writes may skip signing)."""
+
+
+@dataclass(frozen=True)
+class ReviewWrite:
+    """Complete write payload for a review — scores + body + provenance.
+
+    Backends serialize *scores* to JSON and append *content* to the
+    review thread as a single logical write.
+    """
+
+    reviewer_id: UserId
+    """Who is submitting the review."""
+
+    scores: Scores
+    """Dimension scores — backend serializes to JSON."""
+
+    content: str = ""
+    """Review thread body text."""
+
+    scope: str = ""
+    """Review scope label (e.g. \"sedimentation\", \"published\")."""
+
+    commit: CommitData | None = None
+    """Who wrote this and why."""

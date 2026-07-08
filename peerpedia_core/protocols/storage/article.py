@@ -14,6 +14,12 @@ Reconcile rebuilds the meta cache from content history.
 
 from __future__ import annotations
 
+__all__ = [
+    "ArticleContentStorage",
+    "ArticleMetaStorage",
+    "ArticleStorage",
+]
+
 import json
 from dataclasses import replace
 from typing import Protocol
@@ -30,9 +36,8 @@ from peerpedia_core.types.entities import (
     UserId,
     Version,
 )
-from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
-from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
-from peerpedia_core.protocols.scoring import ScoringEngine
+from peerpedia_core.types.writes import ArticleWrite, CommitData, ReviewWrite
+from peerpedia_core.protocols.storage.review import ReviewMetaStorage, ReviewContentStorage
 from peerpedia_core.types.queries import ArticleQuery
 from peerpedia_core.types.scores import Scores
 
@@ -89,8 +94,22 @@ class ArticleContentStorage(Protocol):
         """Resolve *ref* to raw body text (lazy, potentially large)."""
         ...
 
+    def write_article(self, key: ArticleId, write: ArticleWrite) -> Version:
+        """Write article metadata + body to SOT as a single bundled operation.
+
+        The backend serializes the full ``Article`` entity (title, abstract,
+        authors, status, etc.) alongside the body content.  This is the
+        canonical write path — ``update()`` is a convenience for body-only
+        changes.
+        """
+        ...
+
     def update(self, key: ArticleId, content: str) -> Version:
-        """Append a new version of *content* to *key* (git commit)."""
+        """Append a new version of *content* to *key* (git commit).
+
+        Convenience for body-only writes.  Prefer ``write_article()``
+        when metadata changes as well.
+        """
         ...
 
     def delete(self, key: ArticleId) -> Version:
@@ -140,13 +159,11 @@ class ArticleStorage:
         content: ArticleContentStorage,
         review_meta: ReviewMetaStorage,
         review_content: ReviewContentStorage,
-        scoring: ScoringEngine | None = None,
     ):
         self._meta = meta
         self._content = content
         self._review_meta = review_meta
         self._review_content = review_content
-        self._scoring = scoring
 
     # ── Sub-storage access ──────────────────────────────────────────────
 
@@ -168,7 +185,7 @@ class ArticleStorage:
 
     # ── Article CRUD ────────────────────────────────────────────────────
 
-    def create_article(self) -> ArticleId:
+    def create_article(self, commit: CommitData | None = None) -> ArticleId:
         """Create a new article — allocate id, init content, reconcile."""
         article_id = self._meta.create()
         self._content.create(article_id, Format(name="markdown"))
@@ -181,13 +198,16 @@ class ArticleStorage:
 
     def update_article(
         self, article_id: ArticleId, content_str: str, article: Article,
+        commit: CommitData | None = None,
     ) -> None:
-        """Update an existing article — content + meta, then reconcile."""
-        self._content.update(article_id, content_str)
-        self._meta.update(article_id, article)
+        """Update an existing article — write SOT, then reconcile."""
+        self._content.write_article(
+            article_id,
+            ArticleWrite(article=article, content=content_str, commit=commit),
+        )
         self.reconcile_article(article_id)
 
-    def delete_article(self, article_id: ArticleId) -> None:
+    def delete_article(self, article_id: ArticleId, commit: CommitData | None = None) -> None:
         """Delete an article — remove meta first (cache), then content (SOT)."""
         self._meta.delete(article_id)
         self._content.delete(article_id)
@@ -195,37 +215,19 @@ class ArticleStorage:
     # ── Review CRUD ─────────────────────────────────────────────────────
 
     def create_review(
-        self, article_id: ArticleId, review: Review, scores: Scores,
+        self, article_id: ArticleId, reviewer_id: UserId,
+        scores: Scores, body: str = "",
+        commit: CommitData | None = None,
     ) -> None:
-        """Create a review — write content, reconcile meta, update score."""
-        if review.article_id != article_id:
-            raise BadRequestError(
-                f"Review article_id {review.article_id.id!r} does not match "
-                f"context {article_id.id!r}",
-                field="review.article_id",
-                bad_value=review.article_id.id,
-            )
-
-        # Serialize scores for content storage (adapter concern)
-        scores_json = json.dumps(dict(scores.dimensions))
-
-        # Dereference the review body content if present
-        thread_content = (
-            self._content.read_body(review.content_ref)
-            if review.content_ref else ""
+        """Create a review — write SOT, then reconcile meta."""
+        self._review_content.write_review(
+            article_id,
+            ReviewWrite(
+                reviewer_id=reviewer_id, scores=scores,
+                content=body, commit=commit,
+            ),
         )
-
-        # Write to git SOT (content storage)
-        self._review_content.update(article_id, review.reviewer_id, scores_json)
-        self._review_content.append_thread_entry(
-            article_id, review.reviewer_id, thread_content, "[review]",
-        )
-
-        # Rebuild meta index from content
         self._reconcile_reviews(article_id)
-
-        # Update article aggregate score
-        self._update_article_score(article_id)
 
     def read_review(self, article_id: ArticleId, reviewer_id: UserId) -> Review:
         """Read a review from the indexed meta cache."""
@@ -233,35 +235,23 @@ class ArticleStorage:
 
     def update_review(
         self, article_id: ArticleId, reviewer_id: UserId,
-        review: Review, scores: Scores,
+        scores: Scores, body: str = "",
+        commit: CommitData | None = None,
     ) -> None:
-        """Update an existing review — scores + thread, then reconcile."""
-        scores_json = json.dumps(dict(scores.dimensions))
-        self._review_content.update(article_id, reviewer_id, scores_json)
-        self._review_content.append_thread_entry(
-            article_id, reviewer_id,
-            self._content.read_body(review.content_ref) if review.content_ref else "",
-            "[reply]",
+        """Update an existing review — write SOT, then reconcile."""
+        self._review_content.write_review(
+            article_id,
+            ReviewWrite(
+                reviewer_id=reviewer_id, scores=scores,
+                content=body, commit=commit,
+            ),
         )
         self._reconcile_reviews(article_id)
-        self._update_article_score(article_id)
 
-    def delete_review(self, article_id: ArticleId, reviewer_id: UserId) -> None:
+    def delete_review(self, article_id: ArticleId, reviewer_id: UserId, commit: CommitData | None = None) -> None:
         """Delete a review — remove meta first (cache), then content (SOT)."""
         self._review_meta.delete(article_id, reviewer_id)
         self._review_content.delete(article_id, reviewer_id)
-        self._update_article_score(article_id)
-
-    # ── Score computation ───────────────────────────────────────────────
-
-    def _update_article_score(self, article_id: ArticleId) -> None:
-        """Recompute article aggregate score from all reviews."""
-        if self._scoring is None:
-            return
-        reviews = self._review_meta.list(article_id)
-        score = self._scoring.compute(reviews)
-        article = self._meta.read(article_id)
-        self._meta.update(article_id, replace(article, score=score))
 
     # ── Reconcile — public entry point for sync ─────────────────────────
 
@@ -290,7 +280,7 @@ class ArticleStorage:
         """
         article = self._meta.read(key)
         try:
-            content_ref = self._content.read(key)
+            content_ref: ContentRef | None = self._content.read(key)
         except Exception:
             content_ref = article.content_ref
         return replace(

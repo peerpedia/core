@@ -27,6 +27,14 @@ Every Lifecycle MUST support these five morphisms::
 
 from __future__ import annotations
 
+__all__ = [
+    "Extra",
+    "Evaluation",
+    "Lifecycle",
+    "action_publish",
+    "execute",
+]
+
 from collections.abc import Callable
 from typing import Protocol, TYPE_CHECKING
 

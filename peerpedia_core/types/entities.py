@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from peerpedia_core.types.scores import Scores
 
@@ -61,11 +62,10 @@ class Article:
     bib_data: BibData | None = None      # structured bibliographic metadata
     content_ref: ContentRef | None = None  # second-level dereference target
     format: Format | None = None           # content format (e.g. markdown, typst)
-    score: Scores | None = None            # aggregate score, updated on review submission
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Article → JSON-serializable dict."""
         from dataclasses import asdict
 
@@ -78,7 +78,6 @@ class Article:
             "keywords": list(self.keywords),
             "content_ref": self.content_ref.ref if self.content_ref else None,
             "format": self.format.name if self.format else None,
-            "score": dict(self.score.dimensions) if self.score else None,
         }
         if self.bib_data is not None:
             d["bib_data"] = asdict(self.bib_data)
@@ -105,7 +104,7 @@ class Article:
         return cls.from_dict(json.loads(data.decode("utf-8")))
 
     @classmethod
-    def from_dict(cls, d: dict) -> Article:
+    def from_dict(cls, d: dict[str, Any]) -> Article:
         """JSON dict → Article."""
         from datetime import datetime
 
@@ -136,7 +135,6 @@ class Article:
             bib_data=bib_data,
             content_ref=ContentRef(ref=d["content_ref"]) if d.get("content_ref") else None,
             format=Format(name=d["format"]) if d.get("format") else None,
-            score=Scores(dimensions=d["score"]) if d.get("score") else None,
             created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else None,
             updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else None,
         )
@@ -234,8 +232,7 @@ class User:
 
     id: UserId
     name: str
-    public_key: str | None = None         # Ed25519 public key (hex)
-    reputation: Scores | None = None
+    public_key: str | None = None         # public key (algorithm-specific encoding)
 
 
 @dataclass(frozen=True)

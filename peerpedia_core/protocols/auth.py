@@ -9,6 +9,8 @@ alternative) lives in a backend package.
 
 from __future__ import annotations
 
+__all__ = ["AuthProvider", "AuthResult"]
+
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -30,8 +32,10 @@ class AuthProvider(Protocol):
 
     The signature covers ``<method>:<path>:<uid>:<ts>:<body_hash>``,
     binding the auth header to a specific request to prevent replay
-    attacks.  The pubkey is embedded in the header so verification
-    does not need a database lookup (TOFU model).
+    attacks.  The pubkey is embedded in the header so cryptographic
+    verification does not need a database lookup.
+
+    Identity binding requires a trust store — see ``verify()``.
 
     Header format::
 
@@ -45,9 +49,9 @@ class AuthProvider(Protocol):
         self,
         method: str,                # HTTP method — "GET", "POST", etc.
         path: str,                  # request path — "/articles/123"
-        user_id: UserId,            # who is making the request, embedded in header
-        private_key: bytes,         # Ed25519 private key (32 raw bytes)
-        pubkey_hex: str,            # Ed25519 public key (64 hex chars)
+        user_id: UserId,            # who is making the request
+        private_key: bytes,         # private key (algorithm-specific encoding)
+        pubkey_hex: str,            # public key (algorithm-specific encoding)
         body: bytes = b"",          # HTTP body (empty for GET)
     ) -> str:
         """Sign a request.  Returns the ``Authorization`` header value."""
@@ -59,6 +63,15 @@ class AuthProvider(Protocol):
         method: str,        # HTTP method used in the request
         path: str,          # request path used in the request
         body: bytes = b"",  # HTTP body of the request
+        pinned_pubkey: str | None = None,  # expected pubkey for the claimed uid (None = skip identity check)
     ) -> AuthResult:
-        """Verify an incoming request.  No DB lookup needed (TOFU)."""
+        """Verify an incoming request.
+
+        Always performs cryptographic signature verification.
+        If *pinned_pubkey* is provided, also checks that the embedded
+        pubkey matches — this is the identity-binding layer (TOFU).
+        Without it, the result only proves the header was signed by
+        the embedded pubkey, not that the pubkey *belongs* to the
+        claimed user.
+        """
         ...

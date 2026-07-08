@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+__all__ = ["Compiler"]
+
 from typing import Protocol
 
 from peerpedia_core.types.entities import Format

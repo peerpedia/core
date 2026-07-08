@@ -11,16 +11,16 @@ from peerpedia_core.protocols.auth import AuthProvider, AuthResult
 from peerpedia_core.protocols.authorizer import Authorizer
 from peerpedia_core.protocols.compiler import Compiler
 from peerpedia_core.protocols.lifecycle import Lifecycle
-from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
-from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
 from peerpedia_core.protocols.scoring import ScoringEngine
 from peerpedia_core.protocols.storage import (
     ArticleContentStorage,
     ArticleMetaStorage,
     ArticleStorage,
+    ReviewContentStorage,
+    ReviewMetaStorage,
+    UserStorage,
 )
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
-from peerpedia_core.protocols.user_storage import UserStorage
 
 __all__ = [
     "ArticleContentStorage",

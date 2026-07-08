@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from peerpedia_core.exceptions import BadRequestError, NotFoundError
@@ -12,11 +13,9 @@ from peerpedia_core.protocols.lifecycle import (
 )
 from peerpedia_core.protocols.storage import (
     ArticleContentStorage, ArticleMetaStorage, ArticleStorage,
+    ReviewContentStorage, ReviewMetaStorage, UserStorage,
 )
-from peerpedia_core.protocols.review_meta_storage import ReviewMetaStorage
-from peerpedia_core.protocols.review_content_storage import ReviewContentStorage
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
-from peerpedia_core.protocols.user_storage import UserStorage
 from peerpedia_core.types import (
     Article, ArticleDiff, ArticleId, ContentRef, Format,
     HistoryEntry, Review, ReviewId, Scores, User, UserId, Version,
@@ -100,6 +99,19 @@ class MemContentStorage:
     def read_body(self, ref: ContentRef) -> str:
         return self._blobs[ref.ref]
 
+    def write_article(self, key: ArticleId, write) -> Version:
+        import json
+        from peerpedia_core.types.writes import ArticleWrite
+        # Serialize article metadata as YAML-like frontmatter
+        frontmatter = json.dumps({
+            "title": write.article.title,
+            "authors": list(write.article.authors),
+            "abstract": write.article.abstract,
+            "status": write.article.status,
+        })
+        content = f"---\n{frontmatter}\n---\n{write.content}"
+        return self.update(key, content)
+
     def update(self, key: ArticleId, content: str) -> Version:
         ref = ContentRef(ref=f"blob:{key.id}-{len(self._versions.get(key.id, []))}")
         self._repos[key.id] = ref
@@ -122,7 +134,16 @@ class MemContentStorage:
         return self.update(key, data.decode())
 
     def history(self, key: ArticleId, since: Version | None = None) -> list[HistoryEntry]:
-        return []
+        versions = self._versions.get(key.id, [])
+        entries = []
+        for v in reversed(versions):
+            entries.append(HistoryEntry(
+                version=v,
+                message="",
+                user=User(id=UserId(id="system"), name="system"),
+                timestamp=datetime.now(timezone.utc),
+            ))
+        return entries
 
     def diff(self, key: ArticleId, a: Version, b: Version) -> ArticleDiff:
         return ArticleDiff(version_a=a, version_b=b, content_diff="")
@@ -187,6 +208,13 @@ class MemReviewContentStorage:
         self._threads.setdefault(k, [])
         return Version(id=f"v-{time.monotonic_ns()}")
 
+    def write_review(self, article_id: ArticleId, write) -> Version:
+        scores_json = json.dumps(dict(write.scores.dimensions))
+        self.update(article_id, write.reviewer_id, scores_json)
+        if write.content:
+            self.append_thread_entry(article_id, write.reviewer_id, write.content, "[review]")
+        return Version(id=f"v-{time.monotonic_ns()}")
+
     def read(self, article_id: ArticleId, reviewer_id: UserId) -> str | None:
         return self._scores.get(self._key(article_id, reviewer_id))
 
@@ -220,8 +248,33 @@ class MemArticleStorage(ArticleStorage):
             content=MemContentStorage(),
             review_meta=MemReviewStorage(),
             review_content=MemReviewContentStorage(),
-            scoring=MemScoringEngine(),
         )
+
+    def extract(self, key: ArticleId) -> Article:
+        import json as _json
+        article = self.meta.read(key)
+        try:
+            raw = self.content.read_body(self.content.read(key))
+        except Exception:
+            return article
+
+        if raw.startswith("---"):
+            try:
+                _, fm_str, _ = raw.split("---", 2)
+                fm = _json.loads(fm_str.strip())
+                # Merge frontmatter fields into article (meta cache is authoritative)
+                updates: dict[str, object] = {}
+                if not article.title and fm.get("title"):
+                    updates["title"] = fm["title"]
+                if not article.authors and fm.get("authors"):
+                    updates["authors"] = tuple(fm["authors"])
+                if not article.abstract and fm.get("abstract"):
+                    updates["abstract"] = fm["abstract"]
+                if updates:
+                    article = replace(article, **updates)
+            except (ValueError, KeyError):
+                pass
+        return article
 
     def extract_reviews(self, key: ArticleId) -> list[Review]:
         rcontent = self.review_content
@@ -300,9 +353,24 @@ class MemLifecycle:
             return lambda extra, ctx: (s.delete_article(ctx), ctx)[1]
         if action == "review":
             return lambda extra, ctx: (
-                s.create_review(ctx, _require_review(extra),
-                                _parse_scores(extra)), ctx)[1]
+                _validate_review_context(extra, ctx),
+                s.create_review(
+                    ctx,
+                    _require_review(extra).reviewer_id,
+                    _parse_scores(extra),
+                ), ctx)[1]
         raise BadRequestError(f"Unknown action: {action}")
+
+
+def _validate_review_context(extra: Extra, context: ArticleId | None) -> None:
+    review = _require_review(extra)
+    if review.article_id != context:
+        raise BadRequestError(
+            f"Review article_id {review.article_id.id!r} does not match "
+            f"context {context.id if context else 'None'!r}",
+            field="review.article_id",
+            bad_value=review.article_id.id,
+        )
 
 
 def _parse_scores(extra: Extra) -> Scores:

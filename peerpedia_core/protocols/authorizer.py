@@ -11,6 +11,8 @@ independent concerns.  Some actions don't need auth at all
 
 from __future__ import annotations
 
+__all__ = ["Authorizer"]
+
 from typing import Protocol
 
 from peerpedia_core.types.entities import Article, User
