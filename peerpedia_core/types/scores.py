@@ -22,9 +22,6 @@ class Scores:
 
     dimensions: Mapping[str, float] = field(default_factory=dict)
 
-    def __post_init__(self):
-        object.__setattr__(self, "dimensions", dict(self.dimensions))
-
     def average(self) -> float:
         if not self.dimensions:
             return 0.0

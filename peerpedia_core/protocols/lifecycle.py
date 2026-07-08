@@ -7,8 +7,7 @@ The core engine pipeline for every article action::
 
     action: str, extra: Extra, context: ArticleId | None
         -> lifecycle.actions must include action          // universal or plugin-defined
-        -> lifecycle.compatible(action, context, extra)   // domain check
-        -> evaluate = lifecycle.resolve(action)           // pick the morphism
+        -> evaluate = lifecycle.resolve(action)           // pick the morphism (raises if incompatible)
         -> evaluate(extra, context)                       // reduction -> new ArticleId
 
 CLI, REPL, and server never hardcode allowed transitions.
@@ -38,18 +37,11 @@ __all__ = [
 from collections.abc import Callable
 from typing import Protocol, TYPE_CHECKING
 
-from peerpedia_core.exceptions import BadRequestError, ConflictError
+from peerpedia_core.exceptions import BadRequestError
 from peerpedia_core.types.entities import Article, ArticleId
 
 if TYPE_CHECKING:
     from peerpedia_core.protocols.storage import ArticleStorage
-
-# ── Universal actions ───────────────────────────────────────────────────────
-# Every Lifecycle plugin MUST support these.
-
-_UNIVERSAL_ACTIONS: frozenset[str] = frozenset(
-    {"create", "revise", "publish", "delete", "review"}
-)
 
 # ── Types ───────────────────────────────────────────────────────────────────
 
@@ -81,17 +73,15 @@ def action_publish(
 
 
 class Lifecycle(Protocol):
-    """A set of named actions (morphisms) with domain-compatibility rules.
+    """A set of named actions (morphisms) for article lifecycle.
 
-    The ``actions`` property MUST include all universal actions
-    (``create``, ``revise``, ``publish``, ``delete``, ``review``)
-    plus any plugin-specific extensions.
+    The ``actions`` property MUST include::
 
-    Each plugin decides, for a given ``(action, context, extra)``,
-    whether the morphism applies via ``compatible()``.
+        "create", "revise", "publish", "delete", "review"
 
-    ``resolve()`` returns an ``Evaluation`` — callers have already
-    checked ``compatible()``.
+    plus any plugin-specific extensions.  ``resolve()`` returns an
+    ``Evaluation``.  If the action is incompatible with the current
+    context, ``resolve()`` raises ``ConflictError``.
     """
 
     @property
@@ -99,16 +89,10 @@ class Lifecycle(Protocol):
         """All valid action names — universal actions + plugin extensions."""
         ...
 
-    def compatible(
-        self, action: str, context: ArticleId | None, extra: Extra
-    ) -> bool:
-        """Return True if *action* can apply to *context* with *extra*."""
-        ...
-
     def resolve(self, action: str) -> Evaluation:
         """Return the evaluation function for *action*.
 
-        The caller MUST have already checked ``compatible()``.
+        Raise ``ConflictError`` if the action is not compatible.
         """
         ...
 
@@ -147,11 +131,6 @@ def execute(
         raise BadRequestError(
             f"Action '{action}' requires a context (article id), got None",
             field="context", bad_value="None",
-        )
-    if not lifecycle.compatible(action, context, extra):
-        raise ConflictError(
-            f"Action '{action}' is not compatible with the current context",
-            conflicting_entity=action,
         )
     evaluate = lifecycle.resolve(action)
     return evaluate(extra, context)

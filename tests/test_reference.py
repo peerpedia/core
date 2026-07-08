@@ -9,7 +9,7 @@ from peerpedia_core.exceptions import BadRequestError, ConflictError
 from peerpedia_core.protocols.lifecycle import Extra, execute
 from peerpedia_core.protocols.sync import find_merge_base
 from peerpedia_core.types import (
-    Article, ArticleId, Format, Review, ReviewId, Scores, User, UserId, Version,
+    Article, ArticleId, Review, ReviewId, Scores, User, UserId, Version,
 )
 
 from tests.conftest import (
@@ -133,7 +133,7 @@ def test_user_storage_read():
 def test_content_storage_read():
     meta, content = MemMetaStorage(), MemContentStorage()
     aid = meta.create()
-    content.create(aid, Format(name="markdown"))
+    content.create(aid, "markdown")
     content.update(aid, "# Body text")
     assert meta.read(aid).status == "draft"
     assert content.read_body(content.read(aid)) == "# Body text"
@@ -146,8 +146,10 @@ def test_execute_unknown_action():
 
 
 def test_execute_incompatible():
+    """resolve() raising ConflictError propagates through execute()."""
     class Strict(MemLifecycle):
-        def compatible(self, action, context, extra): return False
+        def resolve(self, action):
+            raise ConflictError(f"Action {action!r} not allowed", conflicting_entity=action)
     with pytest.raises(ConflictError):
         execute("revise", {}, ArticleId(id="x"), Strict(MemArticleStorage()))
 
@@ -179,16 +181,14 @@ def test_sync_article():
 
 def test_compiler():
     from peerpedia_core.protocols.compiler import Compiler
-    from peerpedia_core.types import Format
-
     class MemCompiler:
-        def compile(self, content: str, fmt: Format) -> bytes:
-            if fmt.name == "html":
+        def compile(self, content: str, fmt: str) -> bytes:
+            if fmt == "html":
                 return f"<p>{content}</p>".encode()
-            raise ValueError(f"Unknown format: {fmt.name}")
+            raise ValueError(f"Unknown format: {fmt}")
 
     c: Compiler = MemCompiler()
-    assert c.compile("Hello", Format(name="html")) == b"<p>Hello</p>"
+    assert c.compile("Hello", "html") == b"<p>Hello</p>"
 
 
 def test_same_reviewer_reviews_two_articles():

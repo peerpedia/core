@@ -10,9 +10,8 @@ from peerpedia_core.exceptions import NotAuthorizedError
 from peerpedia_core.protocols.authorizer import Authorizer
 from peerpedia_core.protocols.lifecycle import Extra, execute
 from peerpedia_core.types import (
-    Article, ArticleId, Format, Review, ReviewId, Scores, User, UserId,
+    Article, ArticleId, Review, ReviewId, Scores, User, UserId,
 )
-
 from tests.conftest import (
     MemArticleStorage, MemLifecycle, MemUserStorage,
 )
@@ -238,10 +237,10 @@ def test_authorize_skipped_without_user():
 class MemCompiler:
     """A simple in-memory compiler for testing."""
 
-    def compile(self, content: str, fmt: Format) -> bytes:
-        if fmt.name == "html":
+    def compile(self, content: str, fmt: str) -> bytes:
+        if fmt == "html":
             return f"<p>{content}</p>".encode()
-        raise ValueError(f"Unknown format: {fmt.name}")
+        raise ValueError(f"Unknown format: {fmt}")
 
 
 def test_compile_with_compiler():
@@ -252,7 +251,7 @@ def test_compile_with_compiler():
     article = Article(id=aid, title="T", status="draft", content_ref=None)
     pp.revise(aid, content="# Hello", article=article)
 
-    result = pp.compile(aid, Format(name="html"))
+    result = pp.compile(aid, "html")
     # Body includes frontmatter from MemContentStorage.write_article
     assert b"Hello" in result
     assert result.startswith(b"<p>")
@@ -263,4 +262,4 @@ def test_compile_without_compiler_raises():
     pp = _make_peerpedia()
 
     with pytest.raises(RuntimeError, match="No compiler configured"):
-        pp.compile(ArticleId(id="x"), Format(name="html"))
+        pp.compile(ArticleId(id="x"), "html")

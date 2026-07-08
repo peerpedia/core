@@ -30,7 +30,6 @@ from peerpedia_core.types.entities import (
     ArticleDiff,
     ArticleId,
     ContentRef,
-    Format,
     HistoryEntry,
     Review,
     UserId,
@@ -82,7 +81,7 @@ class ArticleContentStorage(Protocol):
     Content is lazy-loaded via ``read_body``.
     """
 
-    def create(self, key: ArticleId, fmt: Format) -> Version:
+    def create(self, key: ArticleId, fmt: str) -> Version:
         """Initialize content for *key* in *fmt* (git init)."""
         ...
 
@@ -188,7 +187,7 @@ class ArticleStorage:
     def create_article(self, commit: CommitData | None = None) -> ArticleId:
         """Create a new article — allocate id, init content, reconcile."""
         article_id = self._meta.create()
-        self._content.create(article_id, Format(name="markdown"))
+        self._content.create(article_id, "markdown")
         self.reconcile_article(article_id)
         return article_id
 
@@ -286,7 +285,7 @@ class ArticleStorage:
         return replace(
             article,
             content_ref=content_ref,
-            format=article.format or Format(name="markdown"),
+            format=article.format or "markdown",
         )
 
     def extract_reviews(self, key: ArticleId) -> list[Review]:

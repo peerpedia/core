@@ -9,8 +9,6 @@ __all__ = ["Compiler"]
 
 from typing import Protocol
 
-from peerpedia_core.types.entities import Format
-
 
 class Compiler(Protocol):
     """Compile article content to an output format.
@@ -20,10 +18,10 @@ class Compiler(Protocol):
 
     ::
 
-        compiler.compile("# Title\n\nHello", Format(name="html"))
+        compiler.compile("# Title\n\nHello", "html")
         → b"<h1>Title</h1>..."
     """
 
-    def compile(self, content: str, fmt: Format) -> bytes:
+    def compile(self, content: str, fmt: str) -> bytes:
         """Compile *content* to *fmt*, returning rendered bytes."""
         ...

@@ -23,7 +23,7 @@ from peerpedia_core.protocols.lifecycle import (
     execute,
 )
 from peerpedia_core.protocols.storage import ArticleStorage, UserStorage
-from peerpedia_core.types.entities import Article, ArticleId, Format, Review, User, UserId
+from peerpedia_core.types.entities import Article, ArticleId, Review, User, UserId
 
 
 class Peerpedia:
@@ -50,7 +50,8 @@ class Peerpedia:
 
     # ── Lifecycle actions ────────────────────────────────────────────────
 
-    def create(self, user: User | None = None) -> ArticleId:
+    def create(self) -> ArticleId:
+        """Allocate a new article id — no auth gate, pre-existence."""
         return execute("create", {}, None, self.lifecycle)
 
     def revise(
@@ -107,7 +108,7 @@ class Peerpedia:
 
     # ── Compiler ─────────────────────────────────────────────────────────
 
-    def compile(self, article_id: ArticleId, fmt: Format) -> bytes:
+    def compile(self, article_id: ArticleId, fmt: str) -> bytes:
         if self.compiler is None:
             raise RuntimeError("No compiler configured")
         content_ref = self.storage.content.read(article_id)

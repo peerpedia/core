@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from peerpedia_core.exceptions import BadRequestError, NotFoundError
 from peerpedia_core.protocols.auth import AuthResult
 from peerpedia_core.protocols.lifecycle import (
-    Lifecycle, Evaluation, Extra, _UNIVERSAL_ACTIONS,
+    Lifecycle, Evaluation, Extra,
 )
 from peerpedia_core.protocols.storage import (
     ArticleContentStorage, ArticleMetaStorage, ArticleStorage,
@@ -17,12 +17,12 @@ from peerpedia_core.protocols.storage import (
 )
 from peerpedia_core.protocols.sync import ArticleSync, ReviewSync
 from peerpedia_core.types import (
-    Article, ArticleDiff, ArticleId, ContentRef, Format,
+    Article, ArticleDiff, ArticleId, ContentRef,
     HistoryEntry, Review, ReviewId, Scores, User, UserId, Version,
 )
 from peerpedia_core.types.queries import ArticleQuery
 
-_MD = Format(name="markdown")
+_MD = "markdown"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -85,7 +85,7 @@ class MemContentStorage:
         self._repos: dict[str, ContentRef] = {}
         self._versions: dict[str, list[Version]] = {}
 
-    def create(self, key: ArticleId, fmt: Format) -> Version:
+    def create(self, key: ArticleId, fmt: str) -> Version:
         ref = ContentRef(ref=f"blob:{key.id}-0")
         self._repos[key.id] = ref
         self._blobs[ref.ref] = ""
@@ -332,10 +332,7 @@ class MemLifecycle:
 
     @property
     def actions(self) -> frozenset[str]:
-        return _UNIVERSAL_ACTIONS
-
-    def compatible(self, action: str, context: ArticleId | None, extra: Extra) -> bool:
-        return action in self.actions
+        return frozenset({"create", "revise", "publish", "delete", "review"})
 
     def resolve(self, action: str) -> Evaluation:
         s = self.storage

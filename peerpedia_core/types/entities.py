@@ -61,7 +61,7 @@ class Article:
     keywords: tuple[str, ...] = ()
     bib_data: BibData | None = None      # structured bibliographic metadata
     content_ref: ContentRef | None = None  # second-level dereference target
-    format: Format | None = None           # content format (e.g. markdown, typst)
+    format: str | None = None               # content format (e.g. "markdown", "typst")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -77,7 +77,7 @@ class Article:
             "abstract": self.abstract,
             "keywords": list(self.keywords),
             "content_ref": self.content_ref.ref if self.content_ref else None,
-            "format": self.format.name if self.format else None,
+            "format": self.format,
         }
         if self.bib_data is not None:
             d["bib_data"] = asdict(self.bib_data)
@@ -134,7 +134,7 @@ class Article:
             keywords=tuple(d.get("keywords", ())),
             bib_data=bib_data,
             content_ref=ContentRef(ref=d["content_ref"]) if d.get("content_ref") else None,
-            format=Format(name=d["format"]) if d.get("format") else None,
+            format=d.get("format"),
             created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else None,
             updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else None,
         )
@@ -162,11 +162,9 @@ class Version:
     id: str                              # backend-specific version string
 
 
-@dataclass(frozen=True)
-class Format:
-    """A content format — ``"html"``, ``"pdf"``, ``"latex"``, ``"markdown"``, etc."""
-
-    name: str
+# Format = str alias — "markdown", "html", "pdf", "typst", ...
+# Inlined as bare strings to avoid a brain-damaged one-field wrapper dataclass.
+Format = str
 
 
 @dataclass(frozen=True)
